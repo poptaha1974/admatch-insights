@@ -9,8 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as FunnelRouteImport } from './routes/funnel'
+import { Route as FinanceRouteImport } from './routes/finance'
+import { Route as CampaignsRouteImport } from './routes/campaigns'
 import { Route as IndexRouteImport } from './routes/index'
 
+const FunnelRoute = FunnelRouteImport.update({
+  id: '/funnel',
+  path: '/funnel',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FinanceRoute = FinanceRouteImport.update({
+  id: '/finance',
+  path: '/finance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CampaignsRoute = CampaignsRouteImport.update({
+  id: '/campaigns',
+  path: '/campaigns',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -19,28 +37,61 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/campaigns': typeof CampaignsRoute
+  '/finance': typeof FinanceRoute
+  '/funnel': typeof FunnelRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/campaigns': typeof CampaignsRoute
+  '/finance': typeof FinanceRoute
+  '/funnel': typeof FunnelRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/campaigns': typeof CampaignsRoute
+  '/finance': typeof FinanceRoute
+  '/funnel': typeof FunnelRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/campaigns' | '/finance' | '/funnel'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/campaigns' | '/finance' | '/funnel'
+  id: '__root__' | '/' | '/campaigns' | '/finance' | '/funnel'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CampaignsRoute: typeof CampaignsRoute
+  FinanceRoute: typeof FinanceRoute
+  FunnelRoute: typeof FunnelRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/funnel': {
+      id: '/funnel'
+      path: '/funnel'
+      fullPath: '/funnel'
+      preLoaderRoute: typeof FunnelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/finance': {
+      id: '/finance'
+      path: '/finance'
+      fullPath: '/finance'
+      preLoaderRoute: typeof FinanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/campaigns': {
+      id: '/campaigns'
+      path: '/campaigns'
+      fullPath: '/campaigns'
+      preLoaderRoute: typeof CampaignsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -53,7 +104,20 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CampaignsRoute: CampaignsRoute,
+  FinanceRoute: FinanceRoute,
+  FunnelRoute: FunnelRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
