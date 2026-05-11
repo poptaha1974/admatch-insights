@@ -9,7 +9,8 @@ import {
   Plug,
 } from "lucide-react";
 
-const items = [
+type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; badge?: string; star?: boolean };
+const items: NavItem[] = [
   { to: "/", label: "نظرة عامة", icon: LayoutDashboard },
   { to: "/campaigns", label: "الحملات", icon: Megaphone, badge: "12" },
   { to: "/funnel", label: "المسار والجماهير", icon: GitBranch },
@@ -17,7 +18,7 @@ const items = [
   { to: "/planner", label: "المخطط المالي", icon: Calculator, star: true },
   { to: "/advisor", label: "المستشار الذكي", icon: Bot, badge: "AI", star: true },
   { to: "/integrations", label: "الربط", icon: Plug },
-] as const;
+];
 
 export function AppSidebar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
