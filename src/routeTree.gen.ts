@@ -16,6 +16,7 @@ import { Route as FinanceRouteImport } from './routes/finance'
 import { Route as CampaignsRouteImport } from './routes/campaigns'
 import { Route as AdvisorRouteImport } from './routes/advisor'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdvisorIndexRouteImport } from './routes/advisor.index'
 
 const PlannerRoute = PlannerRouteImport.update({
   id: '/planner',
@@ -52,34 +53,41 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdvisorIndexRoute = AdvisorIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdvisorRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/advisor': typeof AdvisorRoute
+  '/advisor': typeof AdvisorRouteWithChildren
   '/campaigns': typeof CampaignsRoute
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor/': typeof AdvisorIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/advisor': typeof AdvisorRoute
   '/campaigns': typeof CampaignsRoute
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor': typeof AdvisorIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/advisor': typeof AdvisorRoute
+  '/advisor': typeof AdvisorRouteWithChildren
   '/campaigns': typeof CampaignsRoute
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor/': typeof AdvisorIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,15 +99,16 @@ export interface FileRouteTypes {
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/advisor'
     | '/campaigns'
     | '/finance'
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor'
   id:
     | '__root__'
     | '/'
@@ -109,11 +118,12 @@ export interface FileRouteTypes {
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AdvisorRoute: typeof AdvisorRoute
+  AdvisorRoute: typeof AdvisorRouteWithChildren
   CampaignsRoute: typeof CampaignsRoute
   FinanceRoute: typeof FinanceRoute
   FunnelRoute: typeof FunnelRoute
@@ -172,12 +182,30 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/advisor/': {
+      id: '/advisor/'
+      path: '/'
+      fullPath: '/advisor/'
+      preLoaderRoute: typeof AdvisorIndexRouteImport
+      parentRoute: typeof AdvisorRoute
+    }
   }
 }
 
+interface AdvisorRouteChildren {
+  AdvisorIndexRoute: typeof AdvisorIndexRoute
+}
+
+const AdvisorRouteChildren: AdvisorRouteChildren = {
+  AdvisorIndexRoute: AdvisorIndexRoute,
+}
+
+const AdvisorRouteWithChildren =
+  AdvisorRoute._addFileChildren(AdvisorRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AdvisorRoute: AdvisorRoute,
+  AdvisorRoute: AdvisorRouteWithChildren,
   CampaignsRoute: CampaignsRoute,
   FinanceRoute: FinanceRoute,
   FunnelRoute: FunnelRoute,
@@ -187,3 +215,13 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
