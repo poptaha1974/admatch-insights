@@ -19,8 +19,9 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { useAdvisorChatStore, deriveTitleFromText } from "@/stores/advisorChat";
 import { usePlannerStore } from "@/stores/planner";
 import { generateFallbackReply } from "@/lib/advisorFallback";
-import { Sparkles, AlertCircle } from "lucide-react";
+import { Sparkles, AlertCircle, Download } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 
 const searchSchema = z.object({ q: z.string().optional() });
 
@@ -138,14 +139,55 @@ function ChatPage() {
 
   if (!thread) return null;
 
+  const handleExport = () => {
+    const payload = {
+      threadId: thread.id,
+      title: thread.title,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      exportedAt: Date.now(),
+      messages: thread.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: getText(m),
+      })),
+      plannerData: ctx,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeTitle = (thread.title || "chat").replace(/[^\p{L}\p{N}_-]+/gu, "_").slice(0, 40);
+    a.href = url;
+    a.download = `admatch-${safeTitle}-${thread.id}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success("تم تصدير المحادثة");
+  };
+
   return (
     <div key={threadId} className="flex-1 min-h-0 flex flex-col">
+      <div className="px-4 py-2 border-b border-border flex items-center justify-between gap-2">
+        <div className="text-sm font-medium truncate">{thread.title}</div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExport}
+          disabled={thread.messages.length === 0}
+          className="gap-1.5 shrink-0"
+        >
+          <Download className="size-3.5" />
+          تصدير JSON
+        </Button>
+      </div>
       {backendDown && (
         <div className="px-4 py-2 border-b border-border bg-[oklch(0.72_0.18_55_/_0.08)] text-[11px] text-[oklch(0.82_0.18_55)] flex items-center gap-2">
           <AlertCircle className="size-3.5" />
           الـ Backend مش متاح حالياً — الردود مولّدة محلياً (وضع تجريبي).
         </div>
       )}
+
 
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="max-w-3xl mx-auto w-full">
