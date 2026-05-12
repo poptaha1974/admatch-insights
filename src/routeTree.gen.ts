@@ -17,6 +17,7 @@ import { Route as CampaignsRouteImport } from './routes/campaigns'
 import { Route as AdvisorRouteImport } from './routes/advisor'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdvisorIndexRouteImport } from './routes/advisor.index'
+import { Route as AdvisorThreadIdRouteImport } from './routes/advisor.$threadId'
 
 const PlannerRoute = PlannerRouteImport.update({
   id: '/planner',
@@ -58,6 +59,11 @@ const AdvisorIndexRoute = AdvisorIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdvisorRoute,
 } as any)
+const AdvisorThreadIdRoute = AdvisorThreadIdRouteImport.update({
+  id: '/$threadId',
+  path: '/$threadId',
+  getParentRoute: () => AdvisorRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor/': typeof AdvisorIndexRoute
 }
 export interface FileRoutesByTo {
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor': typeof AdvisorIndexRoute
 }
 export interface FileRoutesById {
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
   '/planner': typeof PlannerRoute
+  '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor/': typeof AdvisorIndexRoute
 }
 export interface FileRouteTypes {
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor/$threadId'
     | '/advisor/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -108,6 +118,7 @@ export interface FileRouteTypes {
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor/$threadId'
     | '/advisor'
   id:
     | '__root__'
@@ -118,6 +129,7 @@ export interface FileRouteTypes {
     | '/funnel'
     | '/integrations'
     | '/planner'
+    | '/advisor/$threadId'
     | '/advisor/'
   fileRoutesById: FileRoutesById
 }
@@ -189,14 +201,23 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdvisorIndexRouteImport
       parentRoute: typeof AdvisorRoute
     }
+    '/advisor/$threadId': {
+      id: '/advisor/$threadId'
+      path: '/$threadId'
+      fullPath: '/advisor/$threadId'
+      preLoaderRoute: typeof AdvisorThreadIdRouteImport
+      parentRoute: typeof AdvisorRoute
+    }
   }
 }
 
 interface AdvisorRouteChildren {
+  AdvisorThreadIdRoute: typeof AdvisorThreadIdRoute
   AdvisorIndexRoute: typeof AdvisorIndexRoute
 }
 
 const AdvisorRouteChildren: AdvisorRouteChildren = {
+  AdvisorThreadIdRoute: AdvisorThreadIdRoute,
   AdvisorIndexRoute: AdvisorIndexRoute,
 }
 
