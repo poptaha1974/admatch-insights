@@ -19,8 +19,9 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { useAdvisorChatStore, deriveTitleFromText } from "@/stores/advisorChat";
 import { usePlannerStore } from "@/stores/planner";
 import { generateFallbackReply } from "@/lib/advisorFallback";
-import { Sparkles, AlertCircle } from "lucide-react";
+import { Sparkles, AlertCircle, Download } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 
 const searchSchema = z.object({ q: z.string().optional() });
 
