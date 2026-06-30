@@ -30,3 +30,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+
+# Python cache and bytecode
+scripts/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
