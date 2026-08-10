@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { handleMetaApiRequest } from "./lib/meta-api";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -68,6 +69,18 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    // Intercept /api/meta/* routes before handing off to TanStack Start SSR
+    try {
+      const metaResponse = await handleMetaApiRequest(request, env);
+      if (metaResponse !== null) return metaResponse;
+    } catch (metaErr) {
+      console.error("Meta API handler error:", metaErr);
+      return new Response(
+        JSON.stringify({ error: "Internal server error" }),
+        { status: 500, headers: { "content-type": "application/json; charset=utf-8" } },
+      );
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
