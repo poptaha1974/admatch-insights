@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { TopBar } from "@/components/TopBar";
-import { Settings2 } from "lucide-react";
-import { useState } from "react";
+import { Settings2, AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -10,96 +10,196 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/campaigns")({ component: Campaigns });
 
-type Row = {
-  name: string; goal: string; status: "active" | "paused";
-  spend: number; leads: number; delivered: number; metaCpa: number; realCpa: number; gap: string; risk?: boolean;
+
+export type CampaignRow = {
+  id: string;
+  name: string;
+  objective: string;
+  effective_status: "ACTIVE" | "PAUSED" | "ARCHIVED" | string;
+  spend?: number;
+  impressions?: number;
+  clicks?: number;
+  ctr?: number;
+  inline_link_clicks?: number;
+  inline_link_click_ctr?: number;
+  landing_page_views?: number;
+  add_to_cart?: number;
+  initiate_checkout?: number;
+  purchases?: number;
+  purchase_roas?: number;
+  data_fetched_at?: string;
 };
 
-const rows: Row[] = [
-  { name: "Karohat رمضان", goal: "Conversions", status: "active", spend: 12450, leads: 327, delivered: 127, metaCpa: 38, realCpa: 98, gap: "+158%" },
-  { name: "Air Fryer Generic Q2", goal: "Lead Gen", status: "active", spend: 9820, leads: 218, delivered: 77, metaCpa: 45, realCpa: 128, gap: "+184%" },
-  { name: "Free Event Lead Gen", goal: "Lead Gen", status: "active", spend: 7350, leads: 237, delivered: 99, metaCpa: 31, realCpa: 74, gap: "+139%" },
-  { name: "Retargeting WhatsApp", goal: "Messages", status: "active", spend: 4280, leads: 195, delivered: 104, metaCpa: 22, realCpa: 41, gap: "+86%" },
-  { name: "منتجات منزلية صيف 26", goal: "Conversions", status: "paused", spend: 1920, leads: 70, delivered: 5, metaCpa: 27, realCpa: 384, gap: "+1322%", risk: true },
-];
-
-function Mini({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-xl bg-card border border-border p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold num mt-1">{value}</div>
-      {sub && <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div>}
-    </div>
-  );
-}
+type CampaignListResponse = {
+  campaigns: CampaignRow[];
+  account_id: string;
+  fetched_at: string;
+};
 
 function Campaigns() {
-  const [selected, setSelected] = useState<Row | null>(null);
+  const [data, setData] = useState<CampaignListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastAttempt, setLastAttempt] = useState<string | null>(null);
+  const [selected, setSelected] = useState<CampaignRow | null>(null);
+  const [approvalAction, setApprovalAction] = useState<string | null>(null);
+
+  const fetchCampaigns = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setLastAttempt(new Date().toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo" }));
+    try {
+      const res = await fetch(`/api/meta/campaigns`, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json: CampaignListResponse = await res.json();
+      setData(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "خطأ غير معروف");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchCampaigns(); }, [fetchCampaigns]);
+
+  const campaigns = data?.campaigns ?? [];
+
+  const handleSensitiveAction = (action: string) => {
+    setApprovalAction(action);
+  };
+
+  const confirmAction = () => {
+    toast.info(`تم تسجيل الطلب: ${approvalAction} — يحتاج موافقة يدوية`);
+    setApprovalAction(null);
+    setSelected(null);
+  };
+
   return (
     <>
-      <TopBar title="الحملات" subtitle="كل حملاتك مع الفجوة الفعلية بين Meta والواقع" />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <Mini label="Active" value="12" />
-        <Mini label="Paused" value="3" />
-        <Mini label="Spend Today" value="2,140 ج.م" sub="تحديث الساعة 2 الفجر" />
-        <Mini label="متوسط Real CPA" value="98 ج.م" sub="آخر 7 أيام" />
-      </div>
+      <TopBar title="الحملات" subtitle="بيانات حية من Meta Ads API" />
 
-      <div className="rounded-xl bg-card border border-border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs text-muted-foreground">
-              <tr>
-                {["الحملة","الهدف","الحالة","إنفاق","Leads","تسليم","Meta CPA","Real CPA","فجوة","إجراء"].map((h) => (
-                  <th key={h} className="text-right px-3 py-3 font-medium whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={r.name}
-                  onClick={() => setSelected(r)}
-                  className="border-t border-border hover:bg-muted/30 cursor-pointer"
-                >
-                  <td className="px-3 py-3 font-medium">{r.name}</td>
-                  <td className="px-3 py-3 text-muted-foreground">{r.goal}</td>
-                  <td className="px-3 py-3">
-                    <span className={`inline-flex items-center gap-1.5 text-[11px] ${r.status === "active" ? "text-[oklch(0.72_0.18_145)]" : "text-[oklch(0.65_0.22_25)]"}`}>
-                      <span className={`size-1.5 rounded-full ${r.status === "active" ? "bg-[oklch(0.72_0.18_145)]" : "bg-[oklch(0.65_0.22_25)]"}`} />
-                      {r.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 num">{r.spend.toLocaleString()}</td>
-                  <td className="px-3 py-3 num">{r.leads}</td>
-                  <td className="px-3 py-3 num">{r.delivered}</td>
-                  <td className="px-3 py-3 num text-muted-foreground">{r.metaCpa}</td>
-                  <td className="px-3 py-3 num font-semibold">{r.realCpa}</td>
-                  <td className="px-3 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded text-[11px] ${r.risk ? "bg-[oklch(0.65_0.22_25_/_0.2)] text-[oklch(0.65_0.22_25)]" : "bg-[oklch(0.72_0.18_55_/_0.15)] text-[oklch(0.72_0.18_55)]"}`}>
-                      {r.gap} {r.risk && "RISK"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3"><Settings2 className="size-4 text-muted-foreground" /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {loading && (
+        <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground text-sm">
+          <Loader2 className="size-5 animate-spin" />
+          <span>جاري تحميل الحملات من Meta…</span>
         </div>
-      </div>
+      )}
 
+      {!loading && error && (
+        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-5 flex items-start gap-3">
+          <AlertCircle className="size-5 text-[oklch(0.65_0.22_25)] shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-semibold text-[oklch(0.65_0.22_25)] mb-1">غير متصل بـ Meta Ads API</div>
+            <div className="text-sm text-muted-foreground mb-2">{error}</div>
+            {lastAttempt && <div className="text-xs text-muted-foreground">آخر محاولة: {lastAttempt}</div>}
+          </div>
+          <Button size="sm" variant="outline" onClick={fetchCampaigns}>
+            <RefreshCw className="size-4 ml-1" /> إعادة المحاولة
+          </Button>
+        </div>
+      )}
+
+      {!loading && !error && campaigns.length === 0 && (
+        <div className="rounded-xl border border-border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
+          لا توجد حملات متاحة. تحقق من صلاحيات الحساب أو اربط حساب Meta أولاً.
+        </div>
+      )}
+
+      {!loading && !error && campaigns.length > 0 && (
+        <>
+          {data?.fetched_at && (
+            <div className="text-xs text-muted-foreground mb-3">
+              آخر تحديث: {new Date(data.fetched_at).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" })}
+              {data.account_id && ` | Account: ${data.account_id}`}
+            </div>
+          )}
+          <div className="rounded-xl bg-card border border-border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-xs text-muted-foreground">
+                  <tr>
+                    {["الحملة","الهدف","الحالة","إنفاق (ج.م)","نقرات الرابط","LPV","ATC","IC","شراء","ROAS","إجراء"].map((h) => (
+                      <th key={h} className="text-right px-3 py-3 font-medium whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {campaigns.map((r) => {
+                    const isActive = r.effective_status === "ACTIVE";
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={() => setSelected(r)}
+                        className="border-t border-border hover:bg-muted/30 cursor-pointer"
+                      >
+                        <td className="px-3 py-3 font-medium">{r.name}</td>
+                        <td className="px-3 py-3 text-muted-foreground">{r.objective ?? "—"}</td>
+                        <td className="px-3 py-3">
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] ${isActive ? "text-[oklch(0.72_0.18_145)]" : "text-[oklch(0.65_0.22_25)]"}`}>
+                            <span className={`size-1.5 rounded-full ${isActive ? "bg-[oklch(0.72_0.18_145)]" : "bg-[oklch(0.65_0.22_25)]"}`} />
+                            {r.effective_status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 num">{r.spend != null ? r.spend.toLocaleString("ar-EG", { maximumFractionDigits: 2 }) : "—"}</td>
+                        <td className="px-3 py-3 num">{r.inline_link_clicks ?? "—"}</td>
+                        <td className="px-3 py-3 num">{r.landing_page_views ?? "—"}</td>
+                        <td className="px-3 py-3 num">{r.add_to_cart ?? "—"}</td>
+                        <td className="px-3 py-3 num">{r.initiate_checkout ?? "—"}</td>
+                        <td className="px-3 py-3 num">{r.purchases ?? "—"}</td>
+                        <td className="px-3 py-3 num">{r.purchase_roas != null ? r.purchase_roas.toFixed(2) : "—"}</td>
+                        <td className="px-3 py-3"><Settings2 className="size-4 text-muted-foreground" /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Campaign detail dialog — Approval Mode: Read + Recommend only */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{selected?.name}</DialogTitle>
             <DialogDescription>
-              Real CPA: <span className="num">{selected?.realCpa}</span> ج.م — فجوة {selected?.gap}
+              <span className="block text-xs text-muted-foreground mb-2">ID: {selected?.id}</span>
+              هذا النظام في وضع القراءة والتوصية فقط. أي إجراء يحتاج موافقة يدوية.
             </DialogDescription>
           </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 text-sm my-2">
+            <div><span className="text-muted-foreground">إنفاق:</span> <span className="num font-semibold">{selected?.spend != null ? `${selected.spend.toLocaleString()} ج.م` : "—"}</span></div>
+            <div><span className="text-muted-foreground">نقرات الرابط:</span> <span className="num">{selected?.inline_link_clicks ?? "—"}</span></div>
+            <div><span className="text-muted-foreground">LPV:</span> <span className="num">{selected?.landing_page_views ?? "—"}</span></div>
+            <div><span className="text-muted-foreground">ATC:</span> <span className="num">{selected?.add_to_cart ?? "—"}</span></div>
+            <div><span className="text-muted-foreground">IC:</span> <span className="num">{selected?.initiate_checkout ?? "—"}</span></div>
+            <div><span className="text-muted-foreground">شراء:</span> <span className="num">{selected?.purchases ?? "—"}</span></div>
+          </div>
           <DialogFooter className="gap-2 sm:justify-start">
-            <Button variant="destructive" onClick={() => { toast.success("تم إيقاف الحملة"); setSelected(null); }}>أوقف الحملة</Button>
-            <Button variant="outline" onClick={() => { toast.success("اتزودت الميزانية"); setSelected(null); }}>زود الميزانية</Button>
-            <Button onClick={() => { toast("جاري التحليل…"); setSelected(null); }}>تحليل AI</Button>
+            <Button variant="outline" onClick={() => handleSensitiveAction(`إيقاف الحملة: ${selected?.name}`)}>طلب إيقاف</Button>
+            <Button variant="outline" onClick={() => handleSensitiveAction(`زيادة ميزانية: ${selected?.name}`)}>طلب زيادة الميزانية</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approval confirmation dialog */}
+      <Dialog open={!!approvalAction} onOpenChange={(o) => !o && setApprovalAction(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تأكيد الإجراء</DialogTitle>
+            <DialogDescription>
+              {approvalAction}
+              <br />
+              <span className="text-xs text-muted-foreground mt-1 block">
+                ⚠️ هذا الإجراء يحتاج مراجعة يدوية قبل التنفيذ الفعلي على Meta.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="destructive" onClick={confirmAction}>تأكيد الطلب</Button>
+            <Button variant="outline" onClick={() => setApprovalAction(null)}>إلغاء</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
