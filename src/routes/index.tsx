@@ -1,152 +1,102 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { TopBar } from "@/components/TopBar";
 import { KpiCard } from "@/components/KpiCard";
-import { useState, useEffect, useCallback } from "react";
-import { X, AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { fetchJson, formatMetric } from "@/lib/http";
 import { Button } from "@/components/ui/button";
-import { KARSEELL_CAMPAIGN_ID } from "@/lib/constants";
+
+type DiagnosticsPayload = {
+  campaign: {
+    id: string;
+    metrics: Record<string, number | null>;
+    provenance: { dataFetchedAt: string; accountTimezone: string | null };
+  };
+  diagnostics: { confidence: string; flags: Array<{ ruleId: string; reason: string }> };
+  ads: Array<{ id: string; name: string | null; metrics: Record<string, number | null> }>;
+};
 
 export const Route = createFileRoute("/")({ component: Overview });
 
-
-type OverviewStats = {
-  spend_total?: number;
-  landing_page_views?: number;
-  add_to_cart?: number;
-  initiate_checkout?: number;
-  purchases?: number;
-  purchase_roas?: number;
-  date_start?: string;
-  date_stop?: string;
-  fetched_at: string;
-  account_id?: string;
-};
-
 function Overview() {
-  const [showBanner, setShowBanner] = useState(true);
-  const [stats, setStats] = useState<OverviewStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DiagnosticsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastAttempt, setLastAttempt] = useState<string | null>(null);
 
-  
-
-  const fetchStats = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async () => {
     setError(null);
-    setLastAttempt(new Date().toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo" }));
     try {
-      const res = await fetch(`/api/meta/campaigns/${KARSEELL_CAMPAIGN_ID}/insights`, {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json() as { ads?: Array<{ spend?: number; landing_page_views?: number; add_to_cart?: number; initiate_checkout?: number; purchases?: number; purchase_roas?: number }>; fetched_at: string; account_id?: string; date_start?: string; date_stop?: string };
-      // Aggregate ad-level metrics
-      const ads = json.ads ?? [];
-      const agg: OverviewStats = {
-        spend_total: ads.reduce((s, a) => s + (a.spend ?? 0), 0),
-        landing_page_views: ads.reduce((s, a) => s + (a.landing_page_views ?? 0), 0),
-        add_to_cart: ads.reduce((s, a) => s + (a.add_to_cart ?? 0), 0),
-        initiate_checkout: ads.reduce((s, a) => s + (a.initiate_checkout ?? 0), 0),
-        purchases: ads.reduce((s, a) => s + (a.purchases ?? 0), 0),
-        fetched_at: json.fetched_at,
-        account_id: json.account_id,
-        date_start: json.date_start,
-        date_stop: json.date_stop,
-      };
-      setStats(agg);
+      const payload = await fetchJson<DiagnosticsPayload>("/api/meta/campaign-diagnostics");
+      setData(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير معروف");
-      setStats(null);
-    } finally {
-      setLoading(false);
+      setData(null);
+      setError(err instanceof Error ? err.message : "تعذر تحميل البيانات");
     }
   }, []);
 
-  useEffect(() => { fetchStats(); }, [fetchStats]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const m = data?.campaign.metrics;
 
   return (
     <>
-      <TopBar title="نظرة عامة" subtitle="بيانات Meta Ads حية — حملة Karseell" />
+      <TopBar title="نظرة عامة" subtitle="بيانات حقيقية فقط مع فصل ما هو معروف عمّا هو غير معروف" />
 
-      {showBanner && (
-        <div className="relative rounded-xl p-4 mb-6 border border-[oklch(0.72_0.18_55_/_0.4)] bg-gradient-to-l from-[oklch(0.72_0.18_55_/_0.15)] to-[oklch(0.65_0.22_25_/_0.1)]">
-          <button onClick={() => setShowBanner(false)} className="absolute top-3 left-3 text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-          <div className="flex items-start gap-3">
-            <AlertCircle className="size-5 text-[oklch(0.72_0.18_55)] mt-0.5 shrink-0" />
-            <p className="text-sm leading-relaxed">
-              <span className="font-semibold">P0 — تحذير: عدم تطابق السعر</span>{" "}
-              الإعلان يعرض <span className="num font-bold">899 ج.م</span> لكن صفحة الهبوط تعرض <span className="num font-bold">1,599 ج.م</span> كافتراضي.
-              هذا يسبب احتكاكًا مباشرًا في قرار الشراء. راجع صفحة الربط للتفاصيل.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {loading && (
-        <div className="flex items-center gap-2 text-muted-foreground text-sm mb-4">
-          <Loader2 className="size-4 animate-spin" />
-          <span>جاري تحميل الإحصائيات من Meta…</span>
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-4 flex items-start gap-3 mb-4">
-          <AlertCircle className="size-5 text-[oklch(0.65_0.22_25)] shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="font-semibold text-[oklch(0.65_0.22_25)] mb-1">غير متصل بـ Meta</div>
-            <div className="text-sm text-muted-foreground">{error}</div>
-            {lastAttempt && <div className="text-xs text-muted-foreground mt-1">آخر محاولة: {lastAttempt}</div>}
-          </div>
-          <Button size="sm" variant="outline" onClick={fetchStats}>
-            <RefreshCw className="size-4 ml-1" /> إعادة
+      {error && (
+        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-4 mb-6 text-sm">
+          <div className="font-medium">غير متصل</div>
+          <div className="text-muted-foreground mt-1">{error}</div>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void load()}>
+            إعادة المحاولة
           </Button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <KpiCard
-          label="إنفاق (Karseell)"
-          value={stats?.spend_total != null ? `${stats.spend_total.toLocaleString("ar-EG", { maximumFractionDigits: 2 })} ج.م` : "—"}
-          hint={stats?.date_start ? `الفترة: ${stats.date_start} → ${stats.date_stop}` : undefined}
-        />
-        <KpiCard
-          label="Landing Page Views"
-          value={stats?.landing_page_views != null ? stats.landing_page_views.toLocaleString() : "—"}
-          hint="بيانات حية من Meta"
-        />
-        <KpiCard
-          label="Add to Cart"
-          value={stats?.add_to_cart != null ? stats.add_to_cart.toLocaleString() : "—"}
-          hint={stats?.initiate_checkout != null ? `IC: ${stats.initiate_checkout}` : undefined}
-        />
-        <KpiCard
-          label="Purchase"
-          value={stats?.purchases != null ? stats.purchases.toLocaleString() : "—"}
-          hint="Meta-attributed فقط — ليس COD Delivered"
-          highlight={stats?.purchases === 0 ? "warning" : undefined}
-        />
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
+        <KpiCard label="Spend" value={`${formatMetric(m?.spend, 2)} ج.م`} />
+        <KpiCard label="LPV" value={formatMetric(m?.landing_page_views)} />
+        <KpiCard label="ATC" value={formatMetric(m?.add_to_cart)} />
+        <KpiCard label="IC" value={formatMetric(m?.initiate_checkout)} />
+        <KpiCard label="Purchase" value={formatMetric(m?.purchases)} />
       </div>
 
-      {stats?.fetched_at && (
-        <div className="text-xs text-muted-foreground mb-4">
-          آخر تحديث: {new Date(stats.fetched_at).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" })}
-          {stats.account_id && ` | Account: ${stats.account_id}`}
-          {` | Campaign: ${KARSEELL_CAMPAIGN_ID}`}
+      <div className="rounded-xl bg-card border border-border p-5 mb-6 text-sm">
+        <div className="font-semibold mb-2">Data Provenance</div>
+        <div>Campaign ID: {data?.campaign.id ?? "—"}</div>
+        <div>
+          Data fetched at:{" "}
+          {data?.campaign.provenance.dataFetchedAt
+            ? new Date(data.campaign.provenance.dataFetchedAt).toLocaleString("ar-EG")
+            : "—"}
         </div>
-      )}
+        <div>Timezone: {data?.campaign.provenance.accountTimezone ?? "—"}</div>
+        <div>Confidence: {data?.diagnostics.confidence ?? "Insufficient Data"}</div>
+      </div>
+
+      <div className="rounded-xl bg-card border border-border p-5 mb-6 text-sm">
+        <div className="font-semibold mb-2">Known / Unknown</div>
+        <div className="text-muted-foreground">
+          Known: CTR(All) is engagement only and not purchase intent.
+        </div>
+        <div className="text-muted-foreground">
+          Unknown: Business winner requires COD confirmed/delivered data integration.
+        </div>
+      </div>
 
       <div className="rounded-xl bg-card border border-border p-5">
-        <h3 className="font-semibold mb-3 text-sm">ملاحظة: بيانات الحملات الإضافية</h3>
-        <p className="text-sm text-muted-foreground">
-          لعرض بيانات حملات إضافية وتحليل القمع الكامل، انتقل إلى صفحة{" "}
-          <strong>الحملات</strong> أو <strong>القمع الكامل</strong>.
-          جميع الأرقام تأتي من Meta Ads API مباشرةً.
-        </p>
+        <div className="font-semibold mb-3">Rule Flags</div>
+        <div className="space-y-2 text-sm">
+          {(data?.diagnostics.flags ?? []).map((flag) => (
+            <div key={flag.ruleId} className="rounded-md border border-border p-3">
+              <div className="font-medium">{flag.ruleId}</div>
+              <div className="text-muted-foreground">{flag.reason}</div>
+            </div>
+          ))}
+          {(data?.diagnostics.flags.length ?? 0) === 0 && (
+            <div className="text-muted-foreground">لا توجد قواعد fired حالياً.</div>
+          )}
+        </div>
       </div>
     </>
   );
 }
-

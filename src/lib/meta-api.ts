@@ -1,318 +1,402 @@
-/**
- * Meta Marketing API handler — server-side only.
- * Called from server.ts to handle /api/meta/* requests.
- * Access tokens are read from Cloudflare Worker env vars, never returned to the client.
- */
+export const META_GRAPH_BASE = "https://graph.facebook.com";
+export const DEFAULT_META_API_VERSION = "v21.0";
 
-export const META_API_VERSION = "v21.0";
-export const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
+export type AppEnv = Record<string, unknown>;
 
-/** Regex for a valid YYYY-MM-DD date string */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-type MetaEnv = {
-  META_ACCESS_TOKEN?: string;
-  META_ACCOUNT_ID?: string;
+export type DiagnosticsThresholds = {
+  minEvidenceSpend: number;
+  highCtrAllThreshold: number;
+  lowOutboundCtrThreshold: number;
+  lpvRateThreshold: number;
+  minOutboundForLpvCheck: number;
+  minLpvForTrackingCheck: number;
+  minLpvForIntentCheck: number;
+  minAtcRateFromLpv: number;
 };
 
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+export type Provenance = {
+  adAccountId: string | null;
+  campaignId: string | null;
+  adSetId: string | null;
+  adIds: string[];
+  timeRange: { since: string | null; until: string | null; preset: string | null };
+  accountTimezone: string | null;
+  dataFetchedAt: string;
+  apiVersion: string;
+  source: "meta_graph_api" | "meta_graph_api_unavailable";
+  rawIncluded: boolean;
+};
+
+export type NormalizedInsights = {
+  id: string;
+  name: string | null;
+  level: "campaign" | "adset" | "ad";
+  effectiveStatus: string | null;
+  configuredStatus: string | null;
+  objective: string | null;
+  optimizationGoal: string | null;
+  attributionSetting: string | null;
+  accountId: string | null;
+  accountTimezoneName: string | null;
+  dateStart: string | null;
+  dateStop: string | null;
+  dataFetchedAt: string;
+  metrics: Record<string, number | null>;
+  provenance: Provenance;
+  raw: Record<string, unknown>;
+};
+
+const FALLBACK_THRESHOLDS: DiagnosticsThresholds = {
+  minEvidenceSpend: 150,
+  highCtrAllThreshold: 5,
+  lowOutboundCtrThreshold: 1,
+  lpvRateThreshold: 70,
+  minOutboundForLpvCheck: 30,
+  minLpvForTrackingCheck: 50,
+  minLpvForIntentCheck: 100,
+  minAtcRateFromLpv: 0.05,
+};
+
+function readEnv(env: AppEnv, key: string): string | undefined {
+  const fromEnv = env[key];
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
+  if (typeof process !== "undefined" && process.env) {
+    const fromProcess = process.env[key];
+    if (typeof fromProcess === "string" && fromProcess.length > 0) return fromProcess;
+  }
+  return undefined;
+}
+
+export function getMetaConfig(env: AppEnv) {
+  const apiVersion = readEnv(env, "META_API_VERSION") ?? DEFAULT_META_API_VERSION;
+  const accessToken = readEnv(env, "META_ACCESS_TOKEN");
+  const adAccountId = readEnv(env, "META_AD_ACCOUNT_ID") ?? null;
+  const campaignId = readEnv(env, "META_CAMPAIGN_ID") ?? null;
+
+  return {
+    apiVersion,
+    accessToken,
+    adAccountId,
+    campaignId,
+    graphBase: `${META_GRAPH_BASE}/${apiVersion}`,
+  };
+}
+
+export function getDiagnosticsThresholds(env: AppEnv): DiagnosticsThresholds {
+  const raw = readEnv(env, "DIAGNOSTIC_THRESHOLDS_JSON");
+  if (!raw) return FALLBACK_THRESHOLDS;
+  try {
+    const parsed = JSON.parse(raw) as Partial<DiagnosticsThresholds>;
+    return { ...FALLBACK_THRESHOLDS, ...parsed };
+  } catch {
+    return FALLBACK_THRESHOLDS;
+  }
+}
+
+export function getMetaDateRange(requestUrl: URL) {
+  const since = requestUrl.searchParams.get("since");
+  const until = requestUrl.searchParams.get("until");
+  const preset = requestUrl.searchParams.get("date_preset") ?? "last_3d";
+  return { since, until, preset };
+}
+
+function asNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function firstNumeric(value: unknown): number | null {
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0] as Record<string, unknown>;
+    return asNumber(first.value);
+  }
+  return null;
+}
+
+function firstByType(items: unknown, expected: string[]): number | null {
+  if (!Array.isArray(items)) return null;
+  const expectedSet = new Set(expected);
+  const found = (items as Array<Record<string, unknown>>).find((item) => {
+    const actionType = String(item.action_type ?? "");
+    if (expectedSet.has(actionType)) return true;
+    return expected.some((v) => actionType.endsWith(v));
   });
+  return found ? asNumber(found.value) : null;
 }
 
-function metaFetchOptions(token: string): RequestInit {
+function metricMap(raw: Record<string, unknown>) {
+  const actions = raw.actions;
+  const actionValues = raw.action_values;
+  const cpat = raw.cost_per_action_type;
+  const roas = raw.website_purchase_roas;
+
   return {
-    headers: { Authorization: ["Bearer", token].join(" ") },
-    signal: AbortSignal.timeout(20000),
+    spend: asNumber(raw.spend),
+    impressions: asNumber(raw.impressions),
+    reach: asNumber(raw.reach),
+    frequency: asNumber(raw.frequency),
+    cpm: asNumber(raw.cpm),
+    clicks: asNumber(raw.clicks),
+    ctr: asNumber(raw.ctr),
+    inline_link_clicks: asNumber(raw.inline_link_clicks),
+    inline_link_click_ctr: asNumber(raw.inline_link_click_ctr),
+    cost_per_inline_link_click: asNumber(raw.cost_per_inline_link_click),
+    outbound_clicks: firstNumeric(raw.outbound_clicks),
+    outbound_clicks_ctr: firstNumeric(raw.outbound_clicks_ctr),
+    cost_per_outbound_click: asNumber(raw.cost_per_outbound_click),
+    landing_page_views: firstByType(actions, ["landing_page_view"]),
+    cost_per_landing_page_view: firstByType(cpat, ["landing_page_view"]),
+    view_content: firstByType(actions, ["view_content"]),
+    add_to_cart: firstByType(actions, ["add_to_cart", "offsite_conversion.fb_pixel_add_to_cart"]),
+    cost_per_add_to_cart: firstByType(cpat, [
+      "add_to_cart",
+      "offsite_conversion.fb_pixel_add_to_cart",
+    ]),
+    initiate_checkout: firstByType(actions, [
+      "initiate_checkout",
+      "offsite_conversion.fb_pixel_initiate_checkout",
+    ]),
+    cost_per_initiate_checkout: firstByType(cpat, [
+      "initiate_checkout",
+      "offsite_conversion.fb_pixel_initiate_checkout",
+    ]),
+    purchases: firstByType(actions, ["purchase", "offsite_conversion.fb_pixel_purchase"]),
+    cost_per_purchase: firstByType(cpat, ["purchase", "offsite_conversion.fb_pixel_purchase"]),
+    purchase_conversion_value: firstByType(actionValues, ["purchase", "omni_purchase"]),
+    purchase_roas: firstNumeric(roas),
   };
 }
 
-type ActionItem = { action_type: string; value: string };
-
-function parseAction(arr: ActionItem[] | undefined, type: string): number | undefined {
-  const item = arr?.find((a) => a.action_type === type);
-  return item ? parseFloat(item.value) : undefined;
-}
-
-function numOrUndef(v: string | undefined): number | undefined {
-  if (v == null || v === "") return undefined;
-  const n = parseFloat(v);
-  return isNaN(n) ? undefined : n;
-}
-
-function outboundVal(
-  arr: Array<{ action_type: string; value: string }> | undefined,
-): number | undefined {
-  const item = arr?.find(
-    (x) => x.action_type === "outbound_click" || x.action_type === "link_click",
-  );
-  return item ? parseFloat(item.value) : undefined;
-}
-
-const AD_INSIGHT_FIELDS = [
-  "ad_id","ad_name","adset_id","adset_name","campaign_id","campaign_name",
-  "account_id","account_currency","date_start","date_stop",
-  "spend","impressions","reach","frequency","cpm",
-  "clicks","ctr",
-  "inline_link_clicks","inline_link_click_ctr","cost_per_inline_link_click",
-  "outbound_clicks","outbound_clicks_ctr","cost_per_outbound_click",
-  "landing_page_views","cost_per_landing_page_view",
-  "actions","action_values","cost_per_action_type","website_purchase_roas",
-].join(",");
-
-type RawInsight = Record<string, unknown>;
-
-function normalizeInsight(raw: RawInsight, fetchedAt: string) {
-  const actions = raw.actions as ActionItem[] | undefined;
-  const actionValues = raw.action_values as ActionItem[] | undefined;
-  const costPerAction = raw.cost_per_action_type as ActionItem[] | undefined;
-  const roas = raw.website_purchase_roas as Array<{ action_type: string; value: string }> | undefined;
-
-  return {
-    id: (raw.ad_id as string) ?? "",
-    name: (raw.ad_name as string) ?? "",
-    adset_id: raw.adset_id as string | undefined,
-    adset_name: raw.adset_name as string | undefined,
-    campaign_id: raw.campaign_id as string | undefined,
-    campaign_name: raw.campaign_name as string | undefined,
-    account_id: raw.account_id as string | undefined,
-    date_start: raw.date_start as string | undefined,
-    date_stop: raw.date_stop as string | undefined,
-    spend: numOrUndef(raw.spend as string | undefined),
-    impressions: numOrUndef(raw.impressions as string | undefined),
-    reach: numOrUndef(raw.reach as string | undefined),
-    frequency: numOrUndef(raw.frequency as string | undefined),
-    cpm: numOrUndef(raw.cpm as string | undefined),
-    clicks: numOrUndef(raw.clicks as string | undefined),
-    ctr: numOrUndef(raw.ctr as string | undefined),
-    inline_link_clicks: numOrUndef(raw.inline_link_clicks as string | undefined),
-    inline_link_click_ctr: numOrUndef(raw.inline_link_click_ctr as string | undefined),
-    cost_per_inline_link_click: numOrUndef(raw.cost_per_inline_link_click as string | undefined),
-    outbound_clicks: outboundVal(raw.outbound_clicks as Array<{ action_type: string; value: string }> | undefined),
-    outbound_clicks_ctr: outboundVal(raw.outbound_clicks_ctr as Array<{ action_type: string; value: string }> | undefined),
-    cost_per_outbound_click: outboundVal(raw.cost_per_outbound_click as Array<{ action_type: string; value: string }> | undefined),
-    landing_page_views: numOrUndef(raw.landing_page_views as string | undefined),
-    cost_per_landing_page_view: numOrUndef(raw.cost_per_landing_page_view as string | undefined),
-    view_content: parseAction(actions, "view_content"),
-    add_to_cart: parseAction(actions, "add_to_cart"),
-    cost_per_add_to_cart: parseAction(costPerAction, "add_to_cart"),
-    initiate_checkout: parseAction(actions, "initiate_checkout"),
-    cost_per_initiate_checkout: parseAction(costPerAction, "initiate_checkout"),
-    purchases: parseAction(actions, "purchase"),
-    purchase_conversion_value: parseAction(actionValues, "purchase"),
-    cost_per_purchase: parseAction(costPerAction, "purchase"),
-    purchase_roas: roas?.[0] ? parseFloat(roas[0].value) : undefined,
-    data_fetched_at: fetchedAt,
-  };
-}
-
-/**
- * Deterministic ad classification based on full-funnel evidence.
- * Rule: No commercial winner without ATC/IC/Purchase evidence (see Rule 2 in issue).
- */
-function classifyAd(insight: ReturnType<typeof normalizeInsight>): string {
-  const spend = insight.spend ?? 0;
-  const lpv = insight.landing_page_views ?? 0;
-  const atc = insight.add_to_cart ?? 0;
-  const ic = insight.initiate_checkout ?? 0;
-  const purchases = insight.purchases ?? 0;
-
-  if (spend < 20) return "INSUFFICIENT_DATA";
-  // Require both ATC and IC corroboration before declaring SALES_WINNER_CANDIDATE
-  if (purchases > 0 && atc > 0 && ic > 0) return "SALES_WINNER_CANDIDATE";
-  if (purchases > 0) return "PURCHASE_WITHOUT_FULL_FUNNEL_EVIDENCE";
-  if (ic > 0 && atc > 0) return "INTENT_LEADER";
-  if (atc > 0 && lpv >= 10) {
-    if (lpv >= 50 && ic === 0) return "TRACKING_SUSPECTED_HIGH_ATC";
-    return "PROMISING_INTENT_INSUFFICIENT_SAMPLE";
-  }
-  if (lpv >= 50 && atc === 0) return "TRACKING_OR_PAGE_FRICTION";
-  if (lpv > 0 && atc === 0) return "ATTENTION_WINNER_ONLY";
-  return "INSUFFICIENT_DATA";
-}
-
-async function handleStatus(env: MetaEnv): Promise<Response> {
-  const token = env.META_ACCESS_TOKEN;
-  const accountId = env.META_ACCOUNT_ID;
-  const checkedAt = new Date().toISOString();
-
-  if (!token) {
-    return json({ meta: { connected: false, error: "META_ACCESS_TOKEN not configured", checkedAt } });
+export async function fetchMetaGraph(
+  env: AppEnv,
+  endpoint: string,
+  params: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
+  const config = getMetaConfig(env);
+  if (!config.accessToken) {
+    throw new Error("META_ACCESS_TOKEN is not configured");
   }
 
-  try {
-    const endpoint = accountId
-      ? `${META_API_BASE}/act_${accountId}?fields=id,name,account_status`
-      : `${META_API_BASE}/me`;
+  const url = new URL(`${config.graphBase}/${endpoint.replace(/^\//, "")}`);
+  url.searchParams.set("access_token", config.accessToken);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
 
-    const res = await fetch(endpoint, { ...metaFetchOptions(token), signal: AbortSignal.timeout(8000) });
-    const data = await res.json() as { error?: { message: string } };
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
 
-    if (!res.ok || data.error) {
-      return json({ meta: { connected: false, error: data.error?.message ?? `HTTP ${res.status}`, checkedAt } });
-    }
-    return json({ meta: { connected: true, checkedAt, accountId } });
-  } catch (err) {
-    return json({ meta: { connected: false, error: err instanceof Error ? err.message : "Network error", checkedAt } });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (!response.ok || payload.error) {
+    const err = (payload.error as Record<string, unknown> | undefined) ?? {};
+    const message =
+      (typeof err.message === "string" && err.message) ||
+      `Meta API request failed with HTTP ${response.status}`;
+    throw new Error(message);
   }
+
+  return payload;
 }
 
-async function handleCampaigns(env: MetaEnv): Promise<Response> {
-  const token = env.META_ACCESS_TOKEN;
-  const accountId = env.META_ACCOUNT_ID;
-  const fetchedAt = new Date().toISOString();
-
-  if (!token || !accountId) {
-    return json({ error: "META_ACCESS_TOKEN or META_ACCOUNT_ID not configured", fetchedAt }, 503);
-  }
-
-  const fields = "id,name,objective,effective_status,configured_status";
-  const url = `${META_API_BASE}/act_${accountId}/campaigns?fields=${encodeURIComponent(fields)}&limit=50`;
-
-  try {
-    const res = await fetch(url, { ...metaFetchOptions(token), signal: AbortSignal.timeout(12000) });
-    const data = await res.json() as {
-      data?: Array<{ id: string; name: string; objective?: string; effective_status?: string; configured_status?: string }>;
-      error?: { message: string };
+export async function fetchMetaStatus(env: AppEnv) {
+  const cfg = getMetaConfig(env);
+  if (!cfg.accessToken) {
+    return {
+      connected: false,
+      reason: "META_ACCESS_TOKEN missing",
+      adAccountId: cfg.adAccountId,
+      campaignId: cfg.campaignId,
+      apiVersion: cfg.apiVersion,
     };
-
-    if (!res.ok || data.error) {
-      return json({ error: data.error?.message ?? `Meta API HTTP ${res.status}`, fetchedAt }, 502);
-    }
-
-    return json({
-      campaigns: (data.data ?? []).map((c) => ({
-        id: c.id, name: c.name, objective: c.objective,
-        effective_status: c.effective_status, configured_status: c.configured_status,
-      })),
-      account_id: accountId,
-      api_version: META_API_VERSION,
-      fetched_at: fetchedAt,
-    });
-  } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "Network error", fetchedAt }, 502);
   }
+
+  const me = await fetchMetaGraph(env, "me", { fields: "id,name" });
+  return {
+    connected: true,
+    reason: null,
+    adAccountId: cfg.adAccountId,
+    campaignId: cfg.campaignId,
+    apiVersion: cfg.apiVersion,
+    actor: { id: me.id ?? null, name: me.name ?? null },
+  };
 }
 
-async function handleCampaignInsights(
-  campaignId: string,
-  env: MetaEnv,
-  reqUrl: URL,
-): Promise<Response> {
-  const token = env.META_ACCESS_TOKEN;
+export function normalizeInsights(
+  level: "campaign" | "adset" | "ad",
+  raw: Record<string, unknown>,
+  requestUrl: URL,
+  env: AppEnv,
+  defaults?: Partial<NormalizedInsights>,
+): NormalizedInsights {
   const fetchedAt = new Date().toISOString();
+  const cfg = getMetaConfig(env);
+  const dateRange = getMetaDateRange(requestUrl);
 
-  if (!token) {
-    return json({ error: "META_ACCESS_TOKEN not configured", fetchedAt }, 503);
-  }
-
-  const datePreset = reqUrl.searchParams.get("date_preset") ?? "last_30d";
-  const rawSince = reqUrl.searchParams.get("since") ?? "";
-  const rawUntil = reqUrl.searchParams.get("until") ?? "";
-
-  // Validate date params strictly before use to prevent injection
-  const validSince = DATE_RE.test(rawSince) ? rawSince : null;
-  const validUntil = DATE_RE.test(rawUntil) ? rawUntil : null;
-
-  const timeParam =
-    validSince && validUntil
-      ? `time_range=${encodeURIComponent(JSON.stringify({ since: validSince, until: validUntil }))}`
-      : `date_preset=${encodeURIComponent(datePreset)}`;
-
-  const insightsUrl =
-    `${META_API_BASE}/${encodeURIComponent(campaignId)}/insights` +
-    `?level=ad` +
-    `&fields=${encodeURIComponent(AD_INSIGHT_FIELDS)}` +
-    `&${timeParam}` +
-    `&limit=50`;
-
-  try {
-    const res = await fetch(insightsUrl, metaFetchOptions(token));
-    const data = await res.json() as { data?: unknown[]; error?: { message: string } };
-
-    if (!res.ok || data.error) {
-      return json({ error: data.error?.message ?? `Meta API HTTP ${res.status}`, fetchedAt }, 502);
-    }
-
-    const normalized = (data.data ?? []).map((raw) => {
-      const insight = normalizeInsight(raw as RawInsight, fetchedAt);
-      return { ...insight, label: classifyAd(insight) };
-    });
-    const first = normalized[0];
-
-    return json({
-      campaign_id: campaignId,
-      campaign_name: first?.campaign_name,
-      account_id: env.META_ACCOUNT_ID ?? first?.account_id,
-      date_start: first?.date_start,
-      date_stop: first?.date_stop,
-      account_timezone: "Africa/Cairo",
-      api_version: META_API_VERSION,
-      fetched_at: fetchedAt,
-      ads: normalized,
-    });
-  } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "Network error", fetchedAt }, 502);
-  }
+  return {
+    id: String(raw[level === "campaign" ? "campaign_id" : "id"] ?? defaults?.id ?? ""),
+    name:
+      (raw[`${level}_name`] as string | undefined) ??
+      (raw.name as string | undefined) ??
+      defaults?.name ??
+      null,
+    level,
+    effectiveStatus: (defaults?.effectiveStatus ?? raw.effective_status ?? null) as string | null,
+    configuredStatus: (defaults?.configuredStatus ?? raw.configured_status ?? null) as
+      string | null,
+    objective: (defaults?.objective ?? raw.objective ?? null) as string | null,
+    optimizationGoal: (defaults?.optimizationGoal ?? raw.optimization_goal ?? null) as
+      string | null,
+    attributionSetting: (defaults?.attributionSetting ?? raw.attribution_setting ?? null) as
+      string | null,
+    accountId: (defaults?.accountId ?? raw.account_id ?? cfg.adAccountId ?? null) as string | null,
+    accountTimezoneName: (defaults?.accountTimezoneName ?? raw.account_timezone_name ?? null) as
+      string | null,
+    dateStart: (raw.date_start as string | undefined) ?? null,
+    dateStop: (raw.date_stop as string | undefined) ?? null,
+    dataFetchedAt: fetchedAt,
+    metrics: metricMap(raw),
+    provenance: {
+      adAccountId: (defaults?.accountId ?? raw.account_id ?? cfg.adAccountId ?? null) as
+        string | null,
+      campaignId:
+        level === "campaign"
+          ? String(raw.campaign_id ?? defaults?.id ?? cfg.campaignId ?? "") || null
+          : ((raw.campaign_id as string | null) ?? cfg.campaignId),
+      adSetId:
+        (raw.adset_id as string | null) ??
+        (level === "adset" ? String(raw.id ?? defaults?.id ?? "") : null),
+      adIds:
+        level === "ad" ? [String(raw.ad_id ?? raw.id ?? defaults?.id ?? "")].filter(Boolean) : [],
+      timeRange: {
+        since: dateRange.since,
+        until: dateRange.until,
+        preset: dateRange.preset,
+      },
+      accountTimezone: (defaults?.accountTimezoneName ?? raw.account_timezone_name ?? null) as
+        string | null,
+      dataFetchedAt: fetchedAt,
+      apiVersion: cfg.apiVersion,
+      source: "meta_graph_api",
+      rawIncluded: true,
+    },
+    raw,
+  };
 }
 
-async function handleAdInsights(adId: string, env: MetaEnv, reqUrl: URL): Promise<Response> {
-  const token = env.META_ACCESS_TOKEN;
-  const fetchedAt = new Date().toISOString();
+export type DiagnosticFlag = {
+  ruleId: string;
+  label: string;
+  status: "verified" | "hypothesis";
+  severity: "high" | "medium" | "low";
+  reason: string;
+};
 
-  if (!token) {
-    return json({ error: "META_ACCESS_TOKEN not configured", fetchedAt }, 503);
-  }
+export type DiagnosticResult = {
+  confidence: "High Confidence" | "Medium Confidence" | "Low Confidence" | "Insufficient Data";
+  adLabels: Array<{ adId: string; adName: string | null; labels: string[] }>;
+  flags: DiagnosticFlag[];
+};
 
-  const datePreset = reqUrl.searchParams.get("date_preset") ?? "last_30d";
-  const insightsUrl =
-    `${META_API_BASE}/${encodeURIComponent(adId)}/insights` +
-    `?fields=${encodeURIComponent(AD_INSIGHT_FIELDS)}` +
-    `&date_preset=${encodeURIComponent(datePreset)}`;
+export function runDiagnostics(
+  campaign: NormalizedInsights | null,
+  ads: NormalizedInsights[],
+  thresholds: DiagnosticsThresholds,
+): DiagnosticResult {
+  const flags: DiagnosticFlag[] = [];
+  const adLabels: Array<{ adId: string; adName: string | null; labels: string[] }> = [];
 
-  try {
-    const res = await fetch(insightsUrl, metaFetchOptions(token));
-    const data = await res.json() as { data?: unknown[]; error?: { message: string } };
+  for (const ad of ads) {
+    const m = ad.metrics;
+    const labels: string[] = [];
 
-    if (!res.ok || data.error) {
-      return json({ error: data.error?.message ?? `Meta API HTTP ${res.status}`, fetchedAt }, 502);
+    const spend = m.spend ?? 0;
+    if (spend < thresholds.minEvidenceSpend) {
+      labels.push("INSUFFICIENT_DATA");
     }
 
-    const normalized = (data.data ?? []).map((raw) => {
-      const insight = normalizeInsight(raw as RawInsight, fetchedAt);
-      return { ...insight, label: classifyAd(insight) };
-    });
+    const ctrAll = m.ctr ?? 0;
+    const outboundCtr = m.outbound_clicks_ctr ?? 0;
+    if (
+      ctrAll >= thresholds.highCtrAllThreshold &&
+      outboundCtr <= thresholds.lowOutboundCtrThreshold
+    ) {
+      labels.push("CURIOSITY_NOT_SITE_INTENT");
+      flags.push({
+        ruleId: "R-CUR-01",
+        label: "Curiosity Hook",
+        status: "hypothesis",
+        severity: "medium",
+        reason: `Ad ${ad.name ?? ad.id}: CTR(All)=${ctrAll.toFixed(2)}% بينما Outbound CTR=${outboundCtr.toFixed(2)}%`,
+      });
+    }
 
-    return json({ ad_id: adId, api_version: META_API_VERSION, fetched_at: fetchedAt, insights: normalized });
-  } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "Network error", fetchedAt }, 502);
+    const outbound = m.outbound_clicks ?? 0;
+    const lpv = m.landing_page_views ?? 0;
+    const lpvRate = outbound > 0 ? (lpv / outbound) * 100 : null;
+    if (
+      outbound >= thresholds.minOutboundForLpvCheck &&
+      lpvRate !== null &&
+      lpvRate < thresholds.lpvRateThreshold
+    ) {
+      flags.push({
+        ruleId: "R-LPV-01",
+        label: "Landing Page Drop",
+        status: "hypothesis",
+        severity: "medium",
+        reason: `Ad ${ad.name ?? ad.id}: LPV rate=${lpvRate.toFixed(1)}% من Outbound Clicks`,
+      });
+    }
+
+    const atc = m.add_to_cart ?? 0;
+    const ic = m.initiate_checkout ?? 0;
+    if (lpv >= thresholds.minLpvForTrackingCheck && (atc === 0 || ic === 0)) {
+      flags.push({
+        ruleId: "R-TRACK-01",
+        label: "Tracking/Page Friction Suspected",
+        status: "hypothesis",
+        severity: "high",
+        reason: `Ad ${ad.name ?? ad.id}: LPV=${lpv}, ATC=${atc}, IC=${ic}. افحص Pixel/Test Events/Dedup/Checkout`,
+      });
+    }
+
+    const atcRate = lpv > 0 ? atc / lpv : 0;
+    if (lpv >= thresholds.minLpvForIntentCheck && atcRate < thresholds.minAtcRateFromLpv) {
+      flags.push({
+        ruleId: "R-OFFER-01",
+        label: "Strong Traffic, Weak Intent",
+        status: "hypothesis",
+        severity: "medium",
+        reason: `Ad ${ad.name ?? ad.id}: LPV=${lpv} مع ATC rate=${(atcRate * 100).toFixed(2)}%`,
+      });
+    }
+
+    if ((m.purchases ?? 0) <= 0) {
+      labels.push("NOT_SALES_WINNER_YET");
+    }
+
+    adLabels.push({ adId: ad.id, adName: ad.name, labels });
   }
+
+  const campaignSpend = campaign?.metrics.spend ?? 0;
+  const campaignPurchase = campaign?.metrics.purchases ?? 0;
+  const confidence: DiagnosticResult["confidence"] =
+    campaignSpend < thresholds.minEvidenceSpend
+      ? "Insufficient Data"
+      : campaignPurchase > 0
+        ? "Medium Confidence"
+        : "Low Confidence";
+
+  return { confidence, adLabels, flags };
 }
 
-/**
- * Main router for /api/meta/* requests.
- * Returns null if the path does not match — caller should fall through to SSR.
- */
-export async function handleMetaApiRequest(
-  request: Request,
-  env: unknown,
-): Promise<Response | null> {
-  const metaEnv = env as MetaEnv;
-  const url = new URL(request.url);
-  const path = url.pathname;
-
-  if (!path.startsWith("/api/meta/")) return null;
-
-  if (path === "/api/meta/status") return handleStatus(metaEnv);
-  if (path === "/api/meta/campaigns") return handleCampaigns(metaEnv);
-
-  const campaignInsightsMatch = path.match(/^\/api\/meta\/campaigns\/([^/]+)\/insights$/);
-  if (campaignInsightsMatch) return handleCampaignInsights(campaignInsightsMatch[1], metaEnv, url);
-
-  const adInsightsMatch = path.match(/^\/api\/meta\/ads\/([^/]+)\/insights$/);
-  if (adInsightsMatch) return handleAdInsights(adInsightsMatch[1], metaEnv, url);
-
-  return json({ error: "Not found" }, 404);
+export function safeMetric(value: number | null): string {
+  return value === null ? "—" : Number.isFinite(value) ? String(value) : "—";
 }

@@ -1,208 +1,289 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { TopBar } from "@/components/TopBar";
-import { Settings2, AlertCircle, RefreshCw, Loader2 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from "@/components/ui/dialog";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { fetchJson, formatMetric } from "@/lib/http";
 import { toast } from "sonner";
+
+type Campaign = {
+  id: string;
+  name: string;
+  objective?: string;
+  effective_status?: string;
+  configured_status?: string;
+};
+
+type Insight = {
+  id: string;
+  metrics: Record<string, number | null>;
+  attributionSetting: string | null;
+  optimizationGoal: string | null;
+  provenance: {
+    dataFetchedAt: string;
+    accountTimezone: string | null;
+    apiVersion: string;
+  };
+};
+
+type PreviewResponse = {
+  requiresApproval: boolean;
+  impactEstimate: { confidence: string; summary: string };
+};
 
 export const Route = createFileRoute("/campaigns")({ component: Campaigns });
 
-
-export type CampaignRow = {
-  id: string;
-  name: string;
-  objective: string;
-  effective_status: "ACTIVE" | "PAUSED" | "ARCHIVED" | string;
-  spend?: number;
-  impressions?: number;
-  clicks?: number;
-  ctr?: number;
-  inline_link_clicks?: number;
-  inline_link_click_ctr?: number;
-  landing_page_views?: number;
-  add_to_cart?: number;
-  initiate_checkout?: number;
-  purchases?: number;
-  purchase_roas?: number;
-  data_fetched_at?: string;
-};
-
-type CampaignListResponse = {
-  campaigns: CampaignRow[];
-  account_id: string;
-  fetched_at: string;
-};
-
 function Campaigns() {
-  const [data, setData] = useState<CampaignListResponse | null>(null);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [insights, setInsights] = useState<Record<string, Insight>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastAttempt, setLastAttempt] = useState<string | null>(null);
-  const [selected, setSelected] = useState<CampaignRow | null>(null);
-  const [approvalAction, setApprovalAction] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Campaign | null>(null);
+  const [preview, setPreview] = useState<PreviewResponse | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const fetchCampaigns = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setLastAttempt(new Date().toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo" }));
     try {
-      const res = await fetch(`/api/meta/campaigns`, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: CampaignListResponse = await res.json();
-      setData(json);
+      const res = await fetchJson<{ data: Campaign[] }>("/api/meta/campaigns");
+      setCampaigns(res.data ?? []);
+
+      const insightPairs = await Promise.all(
+        (res.data ?? []).map(async (campaign) => {
+          try {
+            const insight = await fetchJson<Insight>(`/api/meta/campaigns/${campaign.id}/insights`);
+            return [campaign.id, insight] as const;
+          } catch {
+            return [campaign.id, null] as const;
+          }
+        }),
+      );
+
+      const nextInsights: Record<string, Insight> = {};
+      for (const [id, insight] of insightPairs) {
+        if (insight) nextInsights[id] = insight;
+      }
+      setInsights(nextInsights);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير معروف");
-      setData(null);
+      setError(err instanceof Error ? err.message : "تعذر تحميل الحملات");
+      setCampaigns([]);
+      setInsights({});
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchCampaigns(); }, [fetchCampaigns]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const campaigns = data?.campaigns ?? [];
+  const totals = useMemo(() => {
+    const all = campaigns.length;
+    const active = campaigns.filter((c) =>
+      String(c.effective_status ?? "")
+        .toLowerCase()
+        .includes("active"),
+    ).length;
+    const spend = campaigns.reduce((sum, c) => sum + (insights[c.id]?.metrics.spend ?? 0), 0);
+    return { all, active, spend };
+  }, [campaigns, insights]);
 
-  const handleSensitiveAction = (action: string) => {
-    setApprovalAction(action);
+  const requestPreview = async (campaign: Campaign) => {
+    setActionLoading(true);
+    setPreview(null);
+    try {
+      const payload = await fetchJson<PreviewResponse>("/api/automation/rules/preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          entityType: "campaign",
+          entityId: campaign.id,
+          requestedAction: "pause_or_reduce_candidate",
+        }),
+      });
+      setPreview(payload);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "فشل إنشاء المعاينة");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const confirmAction = () => {
-    toast.info(`تم تسجيل الطلب: ${approvalAction} — يحتاج موافقة يدوية`);
-    setApprovalAction(null);
-    setSelected(null);
+  const approve = async () => {
+    if (!selected) return;
+    setActionLoading(true);
+    try {
+      const result = await fetchJson<{ executed: boolean; reason: string }>(
+        "/api/automation/actions/approve",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            approved: true,
+            approvedBy: "ui-user",
+            entityType: "campaign",
+            entityId: selected.id,
+            action: "pause_or_reduce_candidate",
+          }),
+        },
+      );
+      toast.message(result.executed ? "تم التنفيذ" : "تم تسجيل الموافقة فقط", {
+        description: result.reason,
+      });
+      setSelected(null);
+      setPreview(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "فشل التأكيد");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   return (
     <>
-      <TopBar title="الحملات" subtitle="بيانات حية من Meta Ads API" />
+      <TopBar title="الحملات" subtitle="بيانات حية مع وضع Approval للأفعال الحساسة" />
 
-      {loading && (
-        <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground text-sm">
-          <Loader2 className="size-5 animate-spin" />
-          <span>جاري تحميل الحملات من Meta…</span>
-        </div>
-      )}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Mini label="Campaigns" value={formatMetric(totals.all)} />
+        <Mini label="Active" value={formatMetric(totals.active)} />
+        <Mini label="Spend" value={`${formatMetric(totals.spend, 2)} ج.م`} />
+        <Mini label="Approval Mode" value="Read + Recommend" />
+      </div>
 
-      {!loading && error && (
-        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-5 flex items-start gap-3">
-          <AlertCircle className="size-5 text-[oklch(0.65_0.22_25)] shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="font-semibold text-[oklch(0.65_0.22_25)] mb-1">غير متصل بـ Meta Ads API</div>
-            <div className="text-sm text-muted-foreground mb-2">{error}</div>
-            {lastAttempt && <div className="text-xs text-muted-foreground">آخر محاولة: {lastAttempt}</div>}
-          </div>
-          <Button size="sm" variant="outline" onClick={fetchCampaigns}>
-            <RefreshCw className="size-4 ml-1" /> إعادة المحاولة
+      {error && (
+        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-4 mb-4 text-sm">
+          <div className="font-medium">غير متصل</div>
+          <div className="text-muted-foreground mt-1">{error}</div>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void load()}>
+            إعادة المحاولة
           </Button>
         </div>
       )}
 
-      {!loading && !error && campaigns.length === 0 && (
-        <div className="rounded-xl border border-border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
-          لا توجد حملات متاحة. تحقق من صلاحيات الحساب أو اربط حساب Meta أولاً.
-        </div>
-      )}
-
-      {!loading && !error && campaigns.length > 0 && (
-        <>
-          {data?.fetched_at && (
-            <div className="text-xs text-muted-foreground mb-3">
-              آخر تحديث: {new Date(data.fetched_at).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" })}
-              {data.account_id && ` | Account: ${data.account_id}`}
-            </div>
-          )}
-          <div className="rounded-xl bg-card border border-border overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40 text-xs text-muted-foreground">
-                  <tr>
-                    {["الحملة","الهدف","الحالة","إنفاق (ج.م)","نقرات الرابط","LPV","ATC","IC","شراء","ROAS","إجراء"].map((h) => (
-                      <th key={h} className="text-right px-3 py-3 font-medium whitespace-nowrap">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {campaigns.map((r) => {
-                    const isActive = r.effective_status === "ACTIVE";
-                    return (
-                      <tr
-                        key={r.id}
-                        onClick={() => setSelected(r)}
-                        className="border-t border-border hover:bg-muted/30 cursor-pointer"
+      <div className="rounded-xl bg-card border border-border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                {[
+                  "الحملة",
+                  "Objective",
+                  "Status",
+                  "Spend",
+                  "LPV",
+                  "ATC",
+                  "IC",
+                  "Purchase",
+                  "Last Sync",
+                  "إجراء",
+                ].map((h) => (
+                  <th key={h} className="text-right px-3 py-3 font-medium whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((campaign) => {
+                const insight = insights[campaign.id];
+                return (
+                  <tr key={campaign.id} className="border-t border-border">
+                    <td className="px-3 py-3 font-medium">{campaign.name}</td>
+                    <td className="px-3 py-3 text-muted-foreground">{campaign.objective ?? "—"}</td>
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {campaign.effective_status ?? campaign.configured_status ?? "—"}
+                    </td>
+                    <td className="px-3 py-3 num">{formatMetric(insight?.metrics.spend, 2)}</td>
+                    <td className="px-3 py-3 num">
+                      {formatMetric(insight?.metrics.landing_page_views)}
+                    </td>
+                    <td className="px-3 py-3 num">{formatMetric(insight?.metrics.add_to_cart)}</td>
+                    <td className="px-3 py-3 num">
+                      {formatMetric(insight?.metrics.initiate_checkout)}
+                    </td>
+                    <td className="px-3 py-3 num">{formatMetric(insight?.metrics.purchases)}</td>
+                    <td className="px-3 py-3 text-[11px] text-muted-foreground">
+                      {insight?.provenance.dataFetchedAt
+                        ? new Date(insight.provenance.dataFetchedAt).toLocaleString("ar-EG")
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSelected(campaign);
+                          void requestPreview(campaign);
+                        }}
+                        disabled={loading}
                       >
-                        <td className="px-3 py-3 font-medium">{r.name}</td>
-                        <td className="px-3 py-3 text-muted-foreground">{r.objective ?? "—"}</td>
-                        <td className="px-3 py-3">
-                          <span className={`inline-flex items-center gap-1.5 text-[11px] ${isActive ? "text-[oklch(0.72_0.18_145)]" : "text-[oklch(0.65_0.22_25)]"}`}>
-                            <span className={`size-1.5 rounded-full ${isActive ? "bg-[oklch(0.72_0.18_145)]" : "bg-[oklch(0.65_0.22_25)]"}`} />
-                            {r.effective_status}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3 num">{r.spend != null ? r.spend.toLocaleString("ar-EG", { maximumFractionDigits: 2 }) : "—"}</td>
-                        <td className="px-3 py-3 num">{r.inline_link_clicks ?? "—"}</td>
-                        <td className="px-3 py-3 num">{r.landing_page_views ?? "—"}</td>
-                        <td className="px-3 py-3 num">{r.add_to_cart ?? "—"}</td>
-                        <td className="px-3 py-3 num">{r.initiate_checkout ?? "—"}</td>
-                        <td className="px-3 py-3 num">{r.purchases ?? "—"}</td>
-                        <td className="px-3 py-3 num">{r.purchase_roas != null ? r.purchase_roas.toFixed(2) : "—"}</td>
-                        <td className="px-3 py-3"><Settings2 className="size-4 text-muted-foreground" /></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
+                        Preview
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
 
-      {/* Campaign detail dialog — Approval Mode: Read + Recommend only */}
+              {!loading && campaigns.length === 0 && (
+                <tr>
+                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={10}>
+                    لا توجد حملات متاحة من Meta حالياً.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{selected?.name}</DialogTitle>
             <DialogDescription>
-              <span className="block text-xs text-muted-foreground mb-2">ID: {selected?.id}</span>
-              هذا النظام في وضع القراءة والتوصية فقط. أي إجراء يحتاج موافقة يدوية.
+              Preview only. لن يتم تنفيذ Pause/Scale/Create تلقائياً بدون موافقة صريحة.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-3 text-sm my-2">
-            <div><span className="text-muted-foreground">إنفاق:</span> <span className="num font-semibold">{selected?.spend != null ? `${selected.spend.toLocaleString()} ج.م` : "—"}</span></div>
-            <div><span className="text-muted-foreground">نقرات الرابط:</span> <span className="num">{selected?.inline_link_clicks ?? "—"}</span></div>
-            <div><span className="text-muted-foreground">LPV:</span> <span className="num">{selected?.landing_page_views ?? "—"}</span></div>
-            <div><span className="text-muted-foreground">ATC:</span> <span className="num">{selected?.add_to_cart ?? "—"}</span></div>
-            <div><span className="text-muted-foreground">IC:</span> <span className="num">{selected?.initiate_checkout ?? "—"}</span></div>
-            <div><span className="text-muted-foreground">شراء:</span> <span className="num">{selected?.purchases ?? "—"}</span></div>
-          </div>
-          <DialogFooter className="gap-2 sm:justify-start">
-            <Button variant="outline" onClick={() => handleSensitiveAction(`إيقاف الحملة: ${selected?.name}`)}>طلب إيقاف</Button>
-            <Button variant="outline" onClick={() => handleSensitiveAction(`زيادة ميزانية: ${selected?.name}`)}>طلب زيادة الميزانية</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      {/* Approval confirmation dialog */}
-      <Dialog open={!!approvalAction} onOpenChange={(o) => !o && setApprovalAction(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>تأكيد الإجراء</DialogTitle>
-            <DialogDescription>
-              {approvalAction}
-              <br />
-              <span className="text-xs text-muted-foreground mt-1 block">
-                ⚠️ هذا الإجراء يحتاج مراجعة يدوية قبل التنفيذ الفعلي على Meta.
-              </span>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="destructive" onClick={confirmAction}>تأكيد الطلب</Button>
-            <Button variant="outline" onClick={() => setApprovalAction(null)}>إلغاء</Button>
+          <div className="text-sm rounded-md border border-border p-3 bg-muted/20">
+            <div>Requires Approval: {preview?.requiresApproval ? "Yes" : "—"}</div>
+            <div>Confidence: {preview?.impactEstimate.confidence ?? "—"}</div>
+            <div className="text-muted-foreground mt-1">
+              {preview?.impactEstimate.summary ?? "جاري التحميل…"}
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:justify-start">
+            <Button
+              variant="outline"
+              onClick={() => selected && void requestPreview(selected)}
+              disabled={actionLoading}
+            >
+              تحديث المعاينة
+            </Button>
+            <Button onClick={() => void approve()} disabled={actionLoading || !preview}>
+              تأكيد (بدون تنفيذ فعلي)
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function Mini({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-card border border-border p-4">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xl font-semibold num mt-1">{value}</div>
+    </div>
   );
 }

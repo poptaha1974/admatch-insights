@@ -1,237 +1,254 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { TopBar } from "@/components/TopBar";
-import { useState, useEffect, useCallback } from "react";
-import { AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchJson, formatMetric } from "@/lib/http";
 import { Button } from "@/components/ui/button";
+
+type Insight = {
+  id: string;
+  name: string | null;
+  metrics: Record<string, number | null>;
+  provenance: {
+    accountTimezone: string | null;
+    dataFetchedAt: string;
+    campaignId: string | null;
+  };
+};
+
+type DiagnosticsPayload = {
+  campaign: Insight;
+  ads: Insight[];
+  diagnostics: {
+    confidence: string;
+    adLabels: Array<{ adId: string; adName: string | null; labels: string[] }>;
+    flags: Array<{
+      ruleId: string;
+      label: string;
+      severity: string;
+      reason: string;
+      status: string;
+    }>;
+  };
+  incident: {
+    id: string;
+    adAnchorPriceEgp: number;
+    landingDefaultPriceEgp: number;
+    status: string;
+    codTrustLine: string;
+    deployment: {
+      timezone: string;
+      timestamp: string | null;
+      oldDefaultVariantId: string | null;
+      newDefaultVariantId: string | null;
+      releaseId: string | null;
+    };
+  };
+  pixelAudit: {
+    status: string;
+    distinction: string;
+    detectedPixels: Array<{ pixelId: string; source: string | null; notes: string }>;
+  };
+};
 
 export const Route = createFileRoute("/funnel")({ component: Funnel });
 
-
-type AdInsight = {
-  id: string;
-  name: string;
-  spend?: number;
-  impressions?: number;
-  reach?: number;
-  frequency?: number;
-  cpm?: number;
-  clicks?: number;
-  ctr?: number;
-  inline_link_clicks?: number;
-  inline_link_click_ctr?: number;
-  outbound_clicks?: number;
-  outbound_clicks_ctr?: number;
-  landing_page_views?: number;
-  view_content?: number;
-  add_to_cart?: number;
-  initiate_checkout?: number;
-  purchases?: number;
-  purchase_roas?: number;
-  cost_per_landing_page_view?: number;
-  cost_per_add_to_cart?: number;
-  cost_per_initiate_checkout?: number;
-  cost_per_purchase?: number;
-  label?: string;
-};
-
-type FunnelResponse = {
-  campaign_id: string;
-  campaign_name?: string;
-  account_id?: string;
-  date_start?: string;
-  date_stop?: string;
-  account_timezone?: string;
-  fetched_at: string;
-  ads: AdInsight[];
-};
-
-import { KARSEELL_CAMPAIGN_ID } from "@/lib/constants";
-
-function fmt(v: number | undefined, decimals = 0): string {
-  if (v == null) return "—";
-  return v.toLocaleString("ar-EG", { maximumFractionDigits: decimals });
-}
-
-function pct(num: number | undefined, den: number | undefined): string {
-  if (!num || !den || den === 0) return "—";
-  return ((num / den) * 100).toFixed(1) + "%";
-}
-
-function AdFunnelCard({ ad }: { ad: AdInsight }) {
-  const funnelStages = [
-    { label: "Impressions", value: ad.impressions },
-    { label: "Link Clicks", value: ad.inline_link_clicks },
-    { label: "LPV", value: ad.landing_page_views },
-    { label: "ViewContent", value: ad.view_content },
-    { label: "ATC", value: ad.add_to_cart },
-    { label: "IC", value: ad.initiate_checkout },
-    { label: "Purchase", value: ad.purchases },
-  ];
-  const maxVal = ad.impressions ?? 1;
-
-  return (
-    <div className="rounded-xl bg-card border border-border p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div className="font-semibold text-sm">{ad.name}</div>
-        {ad.label && (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary">{ad.label}</span>
-        )}
-      </div>
-
-      {/* Stage 1: Delivery */}
-      <div className="mb-3 text-xs">
-        <div className="font-medium text-muted-foreground mb-1 uppercase tracking-wide">Stage 1 — Delivery</div>
-        <div className="grid grid-cols-3 gap-2">
-          <div><span className="text-muted-foreground">Spend</span><br /><span className="num font-semibold">{fmt(ad.spend, 2)} ج.م</span></div>
-          <div><span className="text-muted-foreground">Impressions</span><br /><span className="num">{fmt(ad.impressions)}</span></div>
-          <div><span className="text-muted-foreground">CPM</span><br /><span className="num">{fmt(ad.cpm, 2)}</span></div>
-        </div>
-      </div>
-
-      {/* Stage 2: Engagement */}
-      <div className="mb-3 text-xs">
-        <div className="font-medium text-muted-foreground mb-1 uppercase tracking-wide">Stage 2 — Engagement (All)</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><span className="text-muted-foreground">Clicks (All)</span><br /><span className="num">{fmt(ad.clicks)}</span></div>
-          <div><span className="text-muted-foreground">CTR (All)</span><br /><span className="num">{fmt(ad.ctr, 2)}%</span></div>
-        </div>
-      </div>
-
-      {/* Stage 3: Traffic Quality */}
-      <div className="mb-3 text-xs">
-        <div className="font-medium text-muted-foreground mb-1 uppercase tracking-wide">Stage 3 — Traffic Quality</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><span className="text-muted-foreground">Link Clicks</span><br /><span className="num">{fmt(ad.inline_link_clicks)}</span></div>
-          <div><span className="text-muted-foreground">Link CTR</span><br /><span className="num">{fmt(ad.inline_link_click_ctr, 2)}%</span></div>
-          <div><span className="text-muted-foreground">Outbound Clicks</span><br /><span className="num">{fmt(ad.outbound_clicks)}</span></div>
-          <div><span className="text-muted-foreground">Outbound CTR</span><br /><span className="num">{fmt(ad.outbound_clicks_ctr, 2)}%</span></div>
-          <div><span className="text-muted-foreground">LPV</span><br /><span className="num">{fmt(ad.landing_page_views)}</span></div>
-          <div><span className="text-muted-foreground">LPV Rate</span><br /><span className="num">{pct(ad.landing_page_views, ad.outbound_clicks)}</span></div>
-          <div><span className="text-muted-foreground">Cost/LPV</span><br /><span className="num">{fmt(ad.cost_per_landing_page_view, 2)}</span></div>
-        </div>
-      </div>
-
-      {/* Stage 4: Intent */}
-      <div className="mb-3 text-xs">
-        <div className="font-medium text-muted-foreground mb-1 uppercase tracking-wide">Stage 4 — Intent</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><span className="text-muted-foreground">ViewContent</span><br /><span className="num">{fmt(ad.view_content)}</span></div>
-          <div><span className="text-muted-foreground">ATC</span><br /><span className="num">{fmt(ad.add_to_cart)}</span></div>
-          <div><span className="text-muted-foreground">Cost/ATC</span><br /><span className="num">{fmt(ad.cost_per_add_to_cart, 2)}</span></div>
-          <div><span className="text-muted-foreground">IC</span><br /><span className="num">{fmt(ad.initiate_checkout)}</span></div>
-          <div><span className="text-muted-foreground">Cost/IC</span><br /><span className="num">{fmt(ad.cost_per_initiate_checkout, 2)}</span></div>
-        </div>
-      </div>
-
-      {/* Stage 5: Conversion */}
-      <div className="mb-4 text-xs">
-        <div className="font-medium text-muted-foreground mb-1 uppercase tracking-wide">Stage 5 — Conversion</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><span className="text-muted-foreground">Purchase</span><br /><span className="num">{fmt(ad.purchases)}</span></div>
-          <div><span className="text-muted-foreground">Cost/Purchase</span><br /><span className="num">{fmt(ad.cost_per_purchase, 2)}</span></div>
-          <div><span className="text-muted-foreground">ROAS</span><br /><span className="num">{fmt(ad.purchase_roas, 2)}</span></div>
-        </div>
-      </div>
-
-      {/* Funnel Visualization */}
-      <div className="border-t border-border pt-3">
-        <div className="text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-wide">Funnel Drop-off</div>
-        <div className="space-y-1.5">
-          {funnelStages.map((s, i) => {
-            const w = s.value != null && maxVal > 0 ? Math.max((s.value / maxVal) * 100, 2) : 0;
-            return (
-              <div key={s.label} className="flex items-center gap-2 text-[10px]">
-                <span className="text-muted-foreground w-20 shrink-0">{s.label}</span>
-                <div className="flex-1 h-4 rounded bg-muted/40 overflow-hidden">
-                  {s.value != null ? (
-                    <div className="h-full rounded bg-gradient-to-l from-primary to-primary/40" style={{ width: `${w}%` }} />
-                  ) : (
-                    <div className="h-full flex items-center px-1 text-[9px] text-muted-foreground">لا بيانات</div>
-                  )}
-                </div>
-                <span className="num w-12 text-left shrink-0">{s.value != null ? s.value.toLocaleString() : "—"}</span>
-                {i > 0 && s.value != null && funnelStages[i - 1].value != null && (
-                  <span className="text-muted-foreground w-10 shrink-0">
-                    {pct(s.value, funnelStages[i - 1].value)}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Funnel() {
-  const [data, setData] = useState<FunnelResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DiagnosticsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastAttempt, setLastAttempt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const fetchFunnel = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setLastAttempt(new Date().toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo" }));
     try {
-      const res = await fetch(`/api/meta/campaigns/${KARSEELL_CAMPAIGN_ID}/insights`, {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: FunnelResponse = await res.json();
-      setData(json);
+      const payload = await fetchJson<DiagnosticsPayload>("/api/meta/campaign-diagnostics");
+      setData(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير معروف");
+      setError(err instanceof Error ? err.message : "تعذر تحميل القمع");
       setData(null);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchFunnel(); }, [fetchFunnel]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const campaign = data?.campaign;
+
+  const stages = useMemo(() => {
+    if (!campaign) return [];
+    const m = campaign.metrics;
+    return [
+      { label: "Impressions", value: m.impressions },
+      { label: "Clicks All", value: m.clicks },
+      { label: "Link Clicks", value: m.inline_link_clicks },
+      { label: "Outbound Clicks", value: m.outbound_clicks },
+      { label: "LPV", value: m.landing_page_views },
+      { label: "ViewContent", value: m.view_content },
+      { label: "AddToCart", value: m.add_to_cart },
+      { label: "InitiateCheckout", value: m.initiate_checkout },
+      { label: "Purchase", value: m.purchases },
+    ];
+  }, [campaign]);
 
   return (
     <>
-      <TopBar title="القمع الكامل" subtitle="من الانطباع للشراء — بيانات Meta حية" />
+      <TopBar title="القمع الكامل" subtitle="من Delivery إلى Conversion مع قواعد تشخيص حتمية" />
 
-      {loading && (
-        <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground text-sm">
-          <Loader2 className="size-5 animate-spin" />
-          <span>جاري تحميل بيانات القمع من Meta…</span>
+      {data?.incident && (
+        <div className="rounded-xl p-4 mb-4 border border-[oklch(0.65_0.22_25_/_0.5)] bg-[oklch(0.65_0.22_25_/_0.08)]">
+          <div className="font-semibold">P0 PRICE-MESSAGE MISMATCH</div>
+          <div className="text-sm mt-1">Ad anchor price: {data.incident.adAnchorPriceEgp} EGP</div>
+          <div className="text-sm">
+            Landing default price: {data.incident.landingDefaultPriceEgp} EGP
+          </div>
+          <div className="text-sm">Status: {data.incident.status}</div>
+          <div className="text-xs text-muted-foreground mt-1">{data.incident.codTrustLine}</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Deployment annotation ({data.incident.deployment.timezone}):{" "}
+            {data.incident.deployment.timestamp ?? "—"}
+          </div>
         </div>
       )}
 
-      {!loading && error && (
-        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-5 flex items-start gap-3 mb-4">
-          <AlertCircle className="size-5 text-[oklch(0.65_0.22_25)] shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <div className="font-semibold text-[oklch(0.65_0.22_25)] mb-1">غير متصل — لا يمكن تحميل بيانات القمع</div>
-            <div className="text-sm text-muted-foreground mb-1">{error}</div>
-            {lastAttempt && <div className="text-xs text-muted-foreground">آخر محاولة: {lastAttempt}</div>}
-          </div>
-          <Button size="sm" variant="outline" onClick={fetchFunnel}>
-            <RefreshCw className="size-4 ml-1" /> إعادة المحاولة
+      {error && (
+        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-4 mb-4 text-sm">
+          <div className="font-medium">غير متصل</div>
+          <div className="text-muted-foreground mt-1">{error}</div>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void load()}>
+            إعادة المحاولة
           </Button>
         </div>
       )}
 
-      {!loading && data && (
-        <>
-          <div className="text-xs text-muted-foreground mb-4">
-            حملة: {data.campaign_name ?? data.campaign_id}
-            {data.date_start && ` | الفترة: ${data.date_start} → ${data.date_stop}`}
-            {data.account_timezone && ` | ${data.account_timezone}`}
-            {` | آخر تحديث: ${new Date(data.fetched_at).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" })}`}
+      <div className="rounded-xl bg-card border border-border p-5 mb-6">
+        <h3 className="font-semibold mb-4">Campaign Funnel</h3>
+        {stages.length === 0 ? (
+          <div className="text-sm text-muted-foreground">لا توجد بيانات Funnel حالياً.</div>
+        ) : (
+          <div className="space-y-3">
+            {stages.map((stage, index) => {
+              const prev = index === 0 ? null : stages[index - 1].value;
+              const rate =
+                prev && stage.value !== null && prev > 0
+                  ? `${((stage.value / prev) * 100).toFixed(1)}%`
+                  : index === 0
+                    ? "100%"
+                    : "—";
+              return (
+                <div
+                  key={stage.label}
+                  className="flex items-center justify-between border-b border-border/40 pb-2"
+                >
+                  <div className="font-medium">{stage.label}</div>
+                  <div className="text-sm text-muted-foreground">
+                    <span className="num text-foreground">{formatMetric(stage.value)}</span>
+                    <span className="mr-2">Drop/Progress: {rate}</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {data.ads.map((ad) => <AdFunnelCard key={ad.id} ad={ad} />)}
+        )}
+      </div>
+
+      <div className="rounded-xl bg-card border border-border overflow-hidden mb-6">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                {[
+                  "Ad",
+                  "Spend",
+                  "Impr",
+                  "Clicks All",
+                  "CTR All",
+                  "Link Clicks",
+                  "Outbound",
+                  "LPV",
+                  "ATC",
+                  "IC",
+                  "Purchase",
+                  "Labels",
+                ].map((h) => (
+                  <th key={h} className="text-right px-3 py-3 whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.ads ?? []).map((ad) => {
+                const labels =
+                  data?.diagnostics.adLabels.find((x) => x.adId === ad.id)?.labels ?? [];
+                return (
+                  <tr key={ad.id} className="border-t border-border">
+                    <td className="px-3 py-3 font-medium">{ad.name ?? ad.id}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.spend, 2)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.impressions)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.ctr, 2)}%</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.inline_link_clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.outbound_clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.landing_page_views)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.add_to_cart)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.initiate_checkout)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.purchases)}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">
+                      {labels.join(" + ") || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!loading && (data?.ads.length ?? 0) === 0 && (
+                <tr>
+                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>
+                    لا توجد إعلانات متاحة للحملة في النطاق الحالي.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-xl bg-card border border-border p-5">
+          <h3 className="font-semibold mb-3">Deterministic Flags</h3>
+          <div className="space-y-2 text-sm">
+            {(data?.diagnostics.flags ?? []).map((flag) => (
+              <div key={flag.ruleId} className="rounded-md border border-border p-3">
+                <div className="font-medium">
+                  {flag.ruleId} — {flag.label}
+                </div>
+                <div className="text-muted-foreground mt-1">{flag.reason}</div>
+              </div>
+            ))}
+            {!loading && (data?.diagnostics.flags.length ?? 0) === 0 && (
+              <div className="text-muted-foreground">لا توجد قواعد fired حالياً.</div>
+            )}
           </div>
-          {data.ads.length === 0 && (
-            <div className="text-center text-muted-foreground text-sm py-8">لا توجد إعلانات في هذه الحملة.</div>
-          )}
-        </>
-      )}
+        </div>
+
+        <div className="rounded-xl bg-card border border-border p-5">
+          <h3 className="font-semibold mb-3">Pixel Audit</h3>
+          <div className="text-sm">Status: {data?.pixelAudit.status ?? "—"}</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            {data?.pixelAudit.distinction ?? "—"}
+          </div>
+          <div className="mt-3 space-y-2">
+            {(data?.pixelAudit.detectedPixels ?? []).map((p) => (
+              <div key={p.pixelId} className="rounded-md border border-border p-3 text-sm">
+                <div className="font-medium">Pixel {p.pixelId}</div>
+                <div className="text-muted-foreground">Source: {p.source ?? "غير محدد بعد"}</div>
+                <div className="text-muted-foreground">{p.notes}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </>
   );
 }
