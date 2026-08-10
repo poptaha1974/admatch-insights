@@ -18,7 +18,6 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { useAdvisorChatStore, deriveTitleFromText } from "@/stores/advisorChat";
 import { usePlannerStore } from "@/stores/planner";
-import { generateFallbackReply } from "@/lib/advisorFallback";
 import { Sparkles, AlertCircle, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,8 +29,6 @@ export const Route = createFileRoute("/advisor/$threadId")({
   component: ChatPage,
 });
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-
 function makeMessage(role: "user" | "assistant", text: string): UIMessage {
   return {
     id: crypto.randomUUID(),
@@ -41,9 +38,7 @@ function makeMessage(role: "user" | "assistant", text: string): UIMessage {
 }
 
 function getText(m: UIMessage): string {
-  return m.parts
-    .map((p) => (p.type === "text" ? p.text : ""))
-    .join("");
+  return m.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
 }
 
 function ChatPage() {
@@ -83,14 +78,12 @@ function ChatPage() {
       role: m.role,
       content: getText(m),
     }));
-
-    let replyText: string | null = null;
-    let usedFallback = false;
+    let backendFailed = false;
 
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 20000);
-      const res = await fetch(`${API_URL}/api/advisor/chat`, {
+      const res = await fetch(`/api/advisor/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ threadId, messages: history, plannerData: ctx }),
@@ -99,22 +92,23 @@ function ChatPage() {
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { content?: string; reply?: string };
-      replyText = data.content ?? data.reply ?? null;
+      const replyText = data.content ?? data.reply ?? null;
       if (!replyText) throw new Error("empty reply");
+      appendMessage(threadId, makeMessage("assistant", replyText));
       setBackendDown(false);
     } catch {
-      usedFallback = true;
+      backendFailed = true;
       setBackendDown(true);
-      replyText = generateFallbackReply(text, ctx);
+      appendMessage(
+        threadId,
+        makeMessage(
+          "assistant",
+          "تعذر الوصول إلى /api/advisor/chat حالياً. لا يمكنني إصدار تحليل موثوق بدون بيانات backend live.",
+        ),
+      );
     }
-
-    appendMessage(threadId, makeMessage("assistant", replyText!));
     setStatus("ready");
-    if (usedFallback) {
-      toast.message("Backend غير متاح", {
-        description: "تم توليد الرد محلياً. شغّل FastAPI backend عشان تستخدم Gemini.",
-      });
-    }
+    if (backendFailed) toast.message("Backend غير متاح");
     requestAnimationFrame(() => promptRef.current?.focus());
   };
 
@@ -184,10 +178,9 @@ function ChatPage() {
       {backendDown && (
         <div className="px-4 py-2 border-b border-border bg-[oklch(0.72_0.18_55_/_0.08)] text-[11px] text-[oklch(0.82_0.18_55)] flex items-center gap-2">
           <AlertCircle className="size-3.5" />
-          الـ Backend مش متاح حالياً — الردود مولّدة محلياً (وضع تجريبي).
+          الـ Backend مش متاح حالياً — لا يتم توليد ردود افتراضية.
         </div>
       )}
-
 
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="max-w-3xl mx-auto w-full">

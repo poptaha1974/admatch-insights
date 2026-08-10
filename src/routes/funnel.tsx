@@ -1,118 +1,252 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { TopBar } from "@/components/TopBar";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchJson, formatMetric } from "@/lib/http";
+import { Button } from "@/components/ui/button";
+
+type Insight = {
+  id: string;
+  name: string | null;
+  metrics: Record<string, number | null>;
+  provenance: {
+    accountTimezone: string | null;
+    dataFetchedAt: string;
+    campaignId: string | null;
+  };
+};
+
+type DiagnosticsPayload = {
+  campaign: Insight;
+  ads: Insight[];
+  diagnostics: {
+    confidence: string;
+    adLabels: Array<{ adId: string; adName: string | null; labels: string[] }>;
+    flags: Array<{
+      ruleId: string;
+      label: string;
+      severity: string;
+      reason: string;
+      status: string;
+    }>;
+  };
+  incident: {
+    id: string;
+    adAnchorPriceEgp: number;
+    landingDefaultPriceEgp: number;
+    status: string;
+    codTrustLine: string;
+    deployment: {
+      timezone: string;
+      timestamp: string | null;
+      oldDefaultVariantId: string | null;
+      newDefaultVariantId: string | null;
+      releaseId: string | null;
+    };
+  };
+  pixelAudit: {
+    status: string;
+    distinction: string;
+    detectedPixels: Array<{ pixelId: string; source: string | null; notes: string }>;
+  };
+};
 
 export const Route = createFileRoute("/funnel")({ component: Funnel });
 
-const stages = [
-  { label: "Impressions", value: 1247890, pct: 100 },
-  { label: "Click", value: 42180, pct: 3.4 },
-  { label: "Lead form filled", value: 847, pct: 2.0 },
-  { label: "Confirmed by call center", value: 619, pct: 73 },
-  { label: "Delivered", value: 312, pct: 50 },
-];
-
-type Card = { id: string; name: string; product: string; value: number; time: string };
-type Col = { id: string; title: string; cards: Card[] };
-
-const initial: Col[] = [
-  { id: "new", title: "🆕 جديد", cards: [
-    { id: "1", name: "أحمد محمود", product: "Air Fryer 5L", value: 500, time: "9:12 ص" },
-    { id: "2", name: "منى سعيد", product: "Air Fryer 7L", value: 620, time: "9:31 ص" },
-  ]},
-  { id: "confirm", title: "📞 تأكيد", cards: [
-    { id: "3", name: "محمد علي", product: "Air Fryer 5L", value: 500, time: "10:02 ص" },
-  ]},
-  { id: "ship", title: "🚚 شحن", cards: [
-    { id: "4", name: "سارة حسن", product: "Air Fryer 7L", value: 620, time: "أمس" },
-    { id: "5", name: "كريم نبيل", product: "Air Fryer 5L", value: 500, time: "أمس" },
-  ]},
-  { id: "delivered", title: "✅ تسليم", cards: [
-    { id: "6", name: "نور إبراهيم", product: "Air Fryer 5L", value: 500, time: "8:40 ص" },
-  ]},
-];
-
 function Funnel() {
-  const [cols, setCols] = useState(initial);
-  const [drag, setDrag] = useState<{ cardId: string; from: string } | null>(null);
-  const max = stages[0].value;
+  const [data, setData] = useState<DiagnosticsPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const onDrop = (toCol: string) => {
-    if (!drag) return;
-    setCols((cs) => {
-      const card = cs.find((c) => c.id === drag.from)?.cards.find((k) => k.id === drag.cardId);
-      if (!card) return cs;
-      return cs.map((c) =>
-        c.id === drag.from ? { ...c, cards: c.cards.filter((k) => k.id !== drag.cardId) } :
-        c.id === toCol ? { ...c, cards: [...c.cards, card] } : c
-      );
-    });
-    setDrag(null);
-  };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await fetchJson<DiagnosticsPayload>("/api/meta/campaign-diagnostics");
+      setData(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "تعذر تحميل القمع");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const campaign = data?.campaign;
+
+  const stages = useMemo(() => {
+    if (!campaign) return [];
+    const m = campaign.metrics;
+    return [
+      { label: "Impressions", value: m.impressions },
+      { label: "Clicks All", value: m.clicks },
+      { label: "Link Clicks", value: m.inline_link_clicks },
+      { label: "Outbound Clicks", value: m.outbound_clicks },
+      { label: "LPV", value: m.landing_page_views },
+      { label: "ViewContent", value: m.view_content },
+      { label: "AddToCart", value: m.add_to_cart },
+      { label: "InitiateCheckout", value: m.initiate_checkout },
+      { label: "Purchase", value: m.purchases },
+    ];
+  }, [campaign]);
 
   return (
     <>
-      <TopBar title="المسار والجماهير" subtitle="من الانطباع للتسليم — كل خطوة" />
+      <TopBar title="القمع الكامل" subtitle="من Delivery إلى Conversion مع قواعد تشخيص حتمية" />
+
+      {data?.incident && (
+        <div className="rounded-xl p-4 mb-4 border border-[oklch(0.65_0.22_25_/_0.5)] bg-[oklch(0.65_0.22_25_/_0.08)]">
+          <div className="font-semibold">P0 PRICE-MESSAGE MISMATCH</div>
+          <div className="text-sm mt-1">Ad anchor price: {data.incident.adAnchorPriceEgp} EGP</div>
+          <div className="text-sm">
+            Landing default price: {data.incident.landingDefaultPriceEgp} EGP
+          </div>
+          <div className="text-sm">Status: {data.incident.status}</div>
+          <div className="text-xs text-muted-foreground mt-1">{data.incident.codTrustLine}</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Deployment annotation ({data.incident.deployment.timezone}):{" "}
+            {data.incident.deployment.timestamp ?? "—"}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-xl border border-[oklch(0.65_0.22_25_/_0.4)] bg-[oklch(0.65_0.22_25_/_0.08)] p-4 mb-4 text-sm">
+          <div className="font-medium">غير متصل</div>
+          <div className="text-muted-foreground mt-1">{error}</div>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void load()}>
+            إعادة المحاولة
+          </Button>
+        </div>
+      )}
 
       <div className="rounded-xl bg-card border border-border p-5 mb-6">
-        <h3 className="font-semibold mb-4">القمع</h3>
-        <div className="space-y-3">
-          {stages.map((s, i) => {
-            const w = Math.max((s.value / max) * 100, 4);
-            return (
-              <div key={s.label}>
-                <div className="flex items-baseline justify-between text-sm mb-1">
-                  <span className="font-medium">{s.label}</span>
-                  <span className="text-muted-foreground text-xs">
-                    <span className="num font-semibold text-foreground">{s.value.toLocaleString()}</span>
-                    {i > 0 && <span className="mr-2">({s.pct}%)</span>}
-                  </span>
+        <h3 className="font-semibold mb-4">Campaign Funnel</h3>
+        {stages.length === 0 ? (
+          <div className="text-sm text-muted-foreground">لا توجد بيانات Funnel حالياً.</div>
+        ) : (
+          <div className="space-y-3">
+            {stages.map((stage, index) => {
+              const prev = index === 0 ? null : stages[index - 1].value;
+              const rate =
+                prev && stage.value !== null && prev > 0
+                  ? `${((stage.value / prev) * 100).toFixed(1)}%`
+                  : index === 0
+                    ? "100%"
+                    : "—";
+              return (
+                <div
+                  key={stage.label}
+                  className="flex items-center justify-between border-b border-border/40 pb-2"
+                >
+                  <div className="font-medium">{stage.label}</div>
+                  <div className="text-sm text-muted-foreground">
+                    <span className="num text-foreground">{formatMetric(stage.value)}</span>
+                    <span className="mr-2">Drop/Progress: {rate}</span>
+                  </div>
                 </div>
-                <div className="h-8 rounded-md bg-muted/40 overflow-hidden">
-                  <div
-                    className="h-full rounded-md bg-gradient-to-l from-primary to-primary/40"
-                    style={{ width: `${w}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl bg-card border border-border overflow-hidden mb-6">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                {[
+                  "Ad",
+                  "Spend",
+                  "Impr",
+                  "Clicks All",
+                  "CTR All",
+                  "Link Clicks",
+                  "Outbound",
+                  "LPV",
+                  "ATC",
+                  "IC",
+                  "Purchase",
+                  "Labels",
+                ].map((h) => (
+                  <th key={h} className="text-right px-3 py-3 whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.ads ?? []).map((ad) => {
+                const labels =
+                  data?.diagnostics.adLabels.find((x) => x.adId === ad.id)?.labels ?? [];
+                return (
+                  <tr key={ad.id} className="border-t border-border">
+                    <td className="px-3 py-3 font-medium">{ad.name ?? ad.id}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.spend, 2)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.impressions)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.ctr, 2)}%</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.inline_link_clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.outbound_clicks)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.landing_page_views)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.add_to_cart)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.initiate_checkout)}</td>
+                    <td className="px-3 py-3 num">{formatMetric(ad.metrics.purchases)}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">
+                      {labels.join(" + ") || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!loading && (data?.ads.length ?? 0) === 0 && (
+                <tr>
+                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>
+                    لا توجد إعلانات متاحة للحملة في النطاق الحالي.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div>
-        <h3 className="font-semibold mb-3">حالة الطلبات اليوم</h3>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {cols.map((c) => (
-            <div
-              key={c.id}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => onDrop(c.id)}
-              className="rounded-xl bg-card border border-border p-3 min-h-64"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-sm font-medium">{c.title}</div>
-                <span className="text-xs text-muted-foreground num">({c.cards.length})</span>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-xl bg-card border border-border p-5">
+          <h3 className="font-semibold mb-3">Deterministic Flags</h3>
+          <div className="space-y-2 text-sm">
+            {(data?.diagnostics.flags ?? []).map((flag) => (
+              <div key={flag.ruleId} className="rounded-md border border-border p-3">
+                <div className="font-medium">
+                  {flag.ruleId} — {flag.label}
+                </div>
+                <div className="text-muted-foreground mt-1">{flag.reason}</div>
               </div>
-              <div className="space-y-2">
-                {c.cards.map((card) => (
-                  <div
-                    key={card.id}
-                    draggable
-                    onDragStart={() => setDrag({ cardId: card.id, from: c.id })}
-                    className="rounded-lg bg-muted/30 border border-border p-3 text-sm cursor-grab active:cursor-grabbing"
-                  >
-                    <div className="font-medium">{card.name}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{card.product}</div>
-                    <div className="flex items-center justify-between mt-2 text-xs">
-                      <span className="num text-primary">{card.value} ج.م</span>
-                      <span className="text-muted-foreground">{card.time}</span>
-                    </div>
-                  </div>
-                ))}
+            ))}
+            {!loading && (data?.diagnostics.flags.length ?? 0) === 0 && (
+              <div className="text-muted-foreground">لا توجد قواعد fired حالياً.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-card border border-border p-5">
+          <h3 className="font-semibold mb-3">Pixel Audit</h3>
+          <div className="text-sm">Status: {data?.pixelAudit.status ?? "—"}</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            {data?.pixelAudit.distinction ?? "—"}
+          </div>
+          <div className="mt-3 space-y-2">
+            {(data?.pixelAudit.detectedPixels ?? []).map((p) => (
+              <div key={p.pixelId} className="rounded-md border border-border p-3 text-sm">
+                <div className="font-medium">Pixel {p.pixelId}</div>
+                <div className="text-muted-foreground">Source: {p.source ?? "غير محدد بعد"}</div>
+                <div className="text-muted-foreground">{p.notes}</div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </>
