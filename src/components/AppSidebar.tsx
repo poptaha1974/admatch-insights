@@ -7,12 +7,14 @@ import {
   Calculator,
   Bot,
   Plug,
+  FlaskConical,
 } from "lucide-react";
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; badge?: string; star?: boolean };
 const items: NavItem[] = [
   { to: "/", label: "نظرة عامة", icon: LayoutDashboard },
-  { to: "/campaigns", label: "الحملات", icon: Megaphone, badge: "12" },
+  { to: "/campaigns", label: "الحملات", icon: Megaphone },
+  { to: "/karseell", label: "Karseell — تشخيص", icon: FlaskConical, badge: "P0", star: true },
   { to: "/funnel", label: "المسار والجماهير", icon: GitBranch },
   { to: "/finance", label: "الماليات", icon: Wallet },
   { to: "/planner", label: "المخطط المالي", icon: Calculator, star: true },
