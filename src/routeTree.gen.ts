@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PlannerRouteImport } from './routes/planner'
 import { Route as IntegrationsRouteImport } from './routes/integrations'
+import { Route as KarseellRouteImport } from './routes/karseell'
 import { Route as FunnelRouteImport } from './routes/funnel'
 import { Route as FinanceRouteImport } from './routes/finance'
 import { Route as CampaignsRouteImport } from './routes/campaigns'
@@ -27,6 +28,11 @@ const PlannerRoute = PlannerRouteImport.update({
 const IntegrationsRoute = IntegrationsRouteImport.update({
   id: '/integrations',
   path: '/integrations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KarseellRoute = KarseellRouteImport.update({
+  id: '/karseell',
+  path: '/karseell',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FunnelRoute = FunnelRouteImport.update({
@@ -72,6 +78,7 @@ export interface FileRoutesByFullPath {
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
+  '/karseell': typeof KarseellRoute
   '/planner': typeof PlannerRoute
   '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor/': typeof AdvisorIndexRoute
@@ -82,6 +89,7 @@ export interface FileRoutesByTo {
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
+  '/karseell': typeof KarseellRoute
   '/planner': typeof PlannerRoute
   '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor': typeof AdvisorIndexRoute
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   '/finance': typeof FinanceRoute
   '/funnel': typeof FunnelRoute
   '/integrations': typeof IntegrationsRoute
+  '/karseell': typeof KarseellRoute
   '/planner': typeof PlannerRoute
   '/advisor/$threadId': typeof AdvisorThreadIdRoute
   '/advisor/': typeof AdvisorIndexRoute
@@ -107,6 +116,7 @@ export interface FileRouteTypes {
     | '/finance'
     | '/funnel'
     | '/integrations'
+    | '/karseell'
     | '/planner'
     | '/advisor/$threadId'
     | '/advisor/'
@@ -117,6 +127,7 @@ export interface FileRouteTypes {
     | '/finance'
     | '/funnel'
     | '/integrations'
+    | '/karseell'
     | '/planner'
     | '/advisor/$threadId'
     | '/advisor'
@@ -128,6 +139,7 @@ export interface FileRouteTypes {
     | '/finance'
     | '/funnel'
     | '/integrations'
+    | '/karseell'
     | '/planner'
     | '/advisor/$threadId'
     | '/advisor/'
@@ -140,6 +152,7 @@ export interface RootRouteChildren {
   FinanceRoute: typeof FinanceRoute
   FunnelRoute: typeof FunnelRoute
   IntegrationsRoute: typeof IntegrationsRoute
+  KarseellRoute: typeof KarseellRoute
   PlannerRoute: typeof PlannerRoute
 }
 
@@ -157,6 +170,13 @@ declare module '@tanstack/react-router' {
       path: '/integrations'
       fullPath: '/integrations'
       preLoaderRoute: typeof IntegrationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/karseell': {
+      id: '/karseell'
+      path: '/karseell'
+      fullPath: '/karseell'
+      preLoaderRoute: typeof KarseellRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/funnel': {
@@ -231,6 +251,7 @@ const rootRouteChildren: RootRouteChildren = {
   FinanceRoute: FinanceRoute,
   FunnelRoute: FunnelRoute,
   IntegrationsRoute: IntegrationsRoute,
+  KarseellRoute: KarseellRoute,
   PlannerRoute: PlannerRoute,
 }
 export const routeTree = rootRouteImport
